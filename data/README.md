@@ -51,13 +51,16 @@ Each record represents a single recovery attempt/action lifecycle event:
 The generator simulates realistic payment recovery dynamics with probabilistic variation:
 
 1. **Transient Network/Bank Failures**
-   - Failures like `bank_timeout` and `network_error` respond well to automated `RETRY` (65–75% baseline success), especially in early attempts.
+   - Failures like `bank_timeout` and `network_error` respond well to automated `RETRY` (72–76% baseline success), especially in early attempts.
 2. **Customer Intervention Needs**
-   - Failures like `insufficient_funds`, `authentication_failed`, and `payment_method_issue` have poor `RETRY` success (<15%), but high recovery rates with `PAYMENT_LINK` (55–65%) and `REMINDER` (35–50%).
+   - Failures like `insufficient_funds`, `authentication_failed`, and `payment_method_issue` have configured baseline recovery probabilities of:
+     - `RETRY`: 8–16%
+     - `PAYMENT_LINK`: 62–70%
+     - `REMINDER`: 40–52%
 3. **Attempt Degradation Decay**
    - Each successive attempt has diminishing returns ($0.88^{\text{attempt} - 1}$).
 4. **Customer Credit Profile**
    - Higher historical success rates positively bias recovery probability; high previous failure counts negatively bias recovery probability.
 5. **Action Boundaries**
    - `STOP` always yields `recovered = False` and `amount_recovered = 0.0`.
-   - `ESCALATE` is reserved for high-value or stubborn multi-attempt failures.
+   - `ESCALATE` has a low selection weight on early attempts and becomes more likely as recovery attempts increase.

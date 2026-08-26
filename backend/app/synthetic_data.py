@@ -440,7 +440,8 @@ def calculate_dataset_statistics(records: List[Dict[str, Any]]) -> Dict[str, Any
 
     unique_customers = len({r["customer_id"] for r in records})
     unique_payments = len({r["payment_id"] for r in records})
-    total_amount_at_risk = round(sum(r["payment_amount"] for r in records), 2)
+    unique_payment_amounts = {r["payment_id"]: r["payment_amount"] for r in records}
+    total_amount_at_risk = round(sum(unique_payment_amounts.values()), 2)
     total_amount_recovered = round(sum(r["amount_recovered"] for r in records), 2)
     recovered_records = sum(1 for r in records if r["recovered"])
     overall_recovery_rate = round(recovered_records / total_records, 4)

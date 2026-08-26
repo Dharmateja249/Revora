@@ -106,3 +106,60 @@ def test_statistical_patterns(dataset):
     attempt_1_rate = by_attempt[1]["recovery_rate"]
     attempt_2_rate = by_attempt[2]["recovery_rate"]
     assert attempt_1_rate > attempt_2_rate
+
+
+def test_total_amount_at_risk_no_double_counting():
+    """Verify that multiple recovery attempts for the same payment count towards total_amount_at_risk only once."""
+    records = [
+        {
+            "record_id": "rec_001",
+            "customer_id": "cust_001",
+            "payment_id": "pay_100",
+            "payment_amount": 10000.0,
+            "amount_recovered": 0.0,
+            "recovered": False,
+            "failure_reason": "bank_timeout",
+            "action_taken": "RETRY",
+            "attempt_number": 1,
+        },
+        {
+            "record_id": "rec_002",
+            "customer_id": "cust_001",
+            "payment_id": "pay_100",
+            "payment_amount": 10000.0,
+            "amount_recovered": 0.0,
+            "recovered": False,
+            "failure_reason": "bank_timeout",
+            "action_taken": "PAYMENT_LINK",
+            "attempt_number": 2,
+        },
+        {
+            "record_id": "rec_003",
+            "customer_id": "cust_001",
+            "payment_id": "pay_100",
+            "payment_amount": 10000.0,
+            "amount_recovered": 10000.0,
+            "recovered": True,
+            "failure_reason": "bank_timeout",
+            "action_taken": "REMINDER",
+            "attempt_number": 3,
+        },
+        {
+            "record_id": "rec_004",
+            "customer_id": "cust_002",
+            "payment_id": "pay_200",
+            "payment_amount": 5000.0,
+            "amount_recovered": 5000.0,
+            "recovered": True,
+            "failure_reason": "insufficient_funds",
+            "action_taken": "PAYMENT_LINK",
+            "attempt_number": 1,
+        },
+    ]
+
+    stats = calculate_dataset_statistics(records)
+    assert stats["unique_payments"] == 2
+    # pay_100 (10,000) + pay_200 (5,000) = 15,000 (NOT 35,000)
+    assert stats["total_amount_at_risk"] == 15000.0
+    assert stats["total_amount_recovered"] == 15000.0
+
