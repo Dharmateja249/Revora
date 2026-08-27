@@ -165,7 +165,7 @@ class RecoveryAttempt(Base):
     )  # e.g., 'pending', 'succeeded', 'failed'
     amount_recovered: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     external_reference: Mapped[Optional[str]] = mapped_column(
-        String(255), nullable=True
+        String(255), unique=True, nullable=True, index=True
     )
     error_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
