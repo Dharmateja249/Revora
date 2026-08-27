@@ -1,7 +1,7 @@
 import pytest
 from pathlib import Path
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError, DBAPIError
 from sqlalchemy.orm import sessionmaker
 from alembic.config import Config
 from alembic import command
@@ -18,22 +18,33 @@ from app.historical_data import load_historical_data
 
 
 @pytest.fixture
-def alembic_config(tmp_path):
-    """Create Alembic config pointing to a temporary test database."""
-    db_file = tmp_path / "test_migration.db"
-    db_url = f"sqlite:///{db_file}"
+def alembic_config_factory(tmp_path):
+    """Factory fixture returning Alembic Config and db_url for a new temporary database."""
+    counter = 0
 
-    alembic_ini_path = Path(__file__).resolve().parent.parent / "alembic.ini"
-    alembic_cfg = Config(str(alembic_ini_path))
-    alembic_cfg.set_main_option("sqlalchemy.url", db_url)
-    alembic_cfg.set_main_option("script_location", str(Path(__file__).resolve().parent.parent / "alembic"))
+    def _create_config():
+        nonlocal counter
+        counter += 1
+        db_file = tmp_path / f"test_migration_{counter}.db"
+        db_url = f"sqlite:///{db_file}"
 
-    return alembic_cfg, db_url
+        alembic_ini_path = Path(__file__).resolve().parent.parent / "alembic.ini"
+        alembic_cfg = Config(str(alembic_ini_path))
+        alembic_cfg.set_main_option("sqlalchemy.url", db_url)
+        alembic_cfg.set_main_option(
+            "script_location", str(Path(__file__).resolve().parent.parent / "alembic")
+        )
+        return alembic_cfg, db_url
+
+    return _create_config
 
 
-def test_migration_upgrade_and_downgrade(alembic_config):
-    """Verify that migrations can upgrade to head and downgrade to base cleanly."""
-    cfg, db_url = alembic_config
+def test_fresh_database_upgrade_and_downgrade(alembic_config_factory):
+    """
+    Verify that on a fresh empty database, `alembic upgrade head` creates all
+    tables and indexes, and `downgrade base` cleanly removes them.
+    """
+    cfg, db_url = alembic_config_factory()
 
     # Upgrade to head
     command.upgrade(cfg, "head")
@@ -41,7 +52,14 @@ def test_migration_upgrade_and_downgrade(alembic_config):
     engine = create_engine(db_url)
     inspector = inspect(engine)
     tables = set(inspector.get_table_names())
-    assert {"customers", "payments", "recovery_opportunities", "recovery_attempts", "audit_events"}.issubset(tables)
+    expected_tables = {
+        "customers",
+        "payments",
+        "recovery_opportunities",
+        "recovery_attempts",
+        "audit_events",
+    }
+    assert expected_tables.issubset(tables)
 
     # Verify unique index exists on recovery_attempts.external_reference
     indexes = inspector.get_indexes("recovery_attempts")
@@ -54,22 +72,62 @@ def test_migration_upgrade_and_downgrade(alembic_config):
     inspector = inspect(engine)
     tables_after = set(inspector.get_table_names())
     assert "recovery_attempts" not in tables_after
+    assert "customers" not in tables_after
 
 
-def test_migration_cleans_legacy_duplicates_before_constraint(alembic_config):
+def test_preexisting_unmanaged_table_fails_initial_migration(alembic_config_factory):
     """
-    Verify that if a database has legacy duplicate external_reference rows,
-    migration 0002 safely resolves duplicates (preserving one record) and applies
-    the unique constraint without failing.
+    Verify that if a database has pre-existing tables but no Alembic revision history,
+    `alembic upgrade head` fails instead of silently adopting the pre-existing table,
+    and the pre-existing unmanaged data is not deleted.
     """
-    cfg, db_url = alembic_config
+    cfg, db_url = alembic_config_factory()
+    engine = create_engine(db_url)
 
-    # 1. Upgrade only to initial schema (0001)
+    # Simulate an unmanaged database with pre-existing 'customers' table and data
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE customers ("
+                "id VARCHAR(36) PRIMARY KEY, "
+                "name VARCHAR(255) NOT NULL, "
+                "email VARCHAR(255) NOT NULL"
+                ")"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO customers (id, name, email) "
+                "VALUES ('cust_unmanaged_1', 'Legacy User', 'legacy@example.com')"
+            )
+        )
+
+    # Attempting to run initial migration MUST fail because 'customers' already exists
+    with pytest.raises((OperationalError, DBAPIError, Exception)):
+        command.upgrade(cfg, "head")
+
+    # Verify pre-existing unmanaged data was NOT dropped or deleted
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT name, email FROM customers WHERE id = 'cust_unmanaged_1'")
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "Legacy User"
+        assert row[1] == "legacy@example.com"
+
+
+def test_migration_0002_cleans_legacy_duplicates(alembic_config_factory):
+    """
+    Verify that migration 0002 safely resolves duplicate non-null external_reference
+    records and applies the unique constraint.
+    """
+    cfg, db_url = alembic_config_factory()
+
+    # 1. Upgrade to initial schema (0001)
     command.upgrade(cfg, "0001_initial_schema")
 
     engine = create_engine(db_url)
     with engine.begin() as conn:
-        # Insert customer, payment, and opportunity
         conn.execute(
             text(
                 "INSERT INTO customers (id, name, email, total_payments, successful_payments, failed_payments, created_at) "
@@ -89,7 +147,7 @@ def test_migration_cleans_legacy_duplicates_before_constraint(alembic_config):
             )
         )
 
-        # Insert 3 DUPLICATE recovery attempts with identical external_reference 'rec_legacy_dup'
+        # Insert 3 duplicate recovery attempts with identical external_reference
         conn.execute(
             text(
                 "INSERT INTO recovery_attempts (id, opportunity_id, action, status, amount_recovered, external_reference, created_at) "
@@ -109,10 +167,10 @@ def test_migration_cleans_legacy_duplicates_before_constraint(alembic_config):
             )
         )
 
-    # 2. Run migration 0002 to head - should succeed without error
+    # 2. Run migration 0002 to head
     command.upgrade(cfg, "head")
 
-    # 3. Verify exactly 1 attempt with 'rec_legacy_dup' remains (the earliest one)
+    # 3. Verify exactly 1 attempt remains (earliest)
     with engine.connect() as conn:
         remaining = conn.execute(
             text("SELECT id, action FROM recovery_attempts WHERE external_reference = 'rec_legacy_dup'")
@@ -121,7 +179,7 @@ def test_migration_cleans_legacy_duplicates_before_constraint(alembic_config):
         assert remaining[0][0] in ("00000000-0000-0000-0000-000000000011", "00000000000000000000000000000011")
         assert remaining[0][1] == "RETRY"
 
-    # 4. Verify trying to insert another 'rec_legacy_dup' now raises IntegrityError
+    # 4. Verify duplicate insert fails
     with pytest.raises(IntegrityError):
         with engine.begin() as conn:
             conn.execute(
@@ -132,11 +190,11 @@ def test_migration_cleans_legacy_duplicates_before_constraint(alembic_config):
             )
 
 
-def test_multiple_null_external_reference_allowed(alembic_config):
+def test_multiple_null_external_reference_allowed(alembic_config_factory):
     """
     Verify that multiple NULL external_reference values can coexist without constraint violation.
     """
-    cfg, db_url = alembic_config
+    cfg, db_url = alembic_config_factory()
     command.upgrade(cfg, "head")
 
     engine = create_engine(db_url)
@@ -166,7 +224,6 @@ def test_multiple_null_external_reference_allowed(alembic_config):
     session.add(opp)
     session.commit()
 
-    # Insert two attempts with external_reference=None
     att1 = RecoveryAttempt(
         opportunity_id=opp.id,
         action="RETRY",
@@ -180,7 +237,6 @@ def test_multiple_null_external_reference_allowed(alembic_config):
         external_reference=None,
     )
     session.add_all([att1, att2])
-    # Should commit successfully without IntegrityError
     session.commit()
 
     null_count = (
@@ -192,12 +248,12 @@ def test_multiple_null_external_reference_allowed(alembic_config):
     session.close()
 
 
-def test_migrated_database_historical_ingestion(alembic_config):
+def test_migrated_database_historical_ingestion(alembic_config_factory):
     """
     Verify that a database created and migrated via Alembic ingests the full
     historical dataset successfully and remains idempotent.
     """
-    cfg, db_url = alembic_config
+    cfg, db_url = alembic_config_factory()
     command.upgrade(cfg, "head")
 
     engine = create_engine(db_url)

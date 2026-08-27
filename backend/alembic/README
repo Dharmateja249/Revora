@@ -1,1 +1,37 @@
-Generic single-database configuration.
+# Revora Database Migrations (Alembic)
+
+This directory contains database schema migrations for the Revora backend.
+
+## Common Commands
+
+```bash
+# Run all pending migrations
+alembic upgrade head
+
+# Check current revision
+alembic current
+
+# Revert all migrations back to base
+alembic downgrade base
+
+# Create a new migration revision
+alembic revision -m "description_of_change"
+```
+
+## Adopting an Existing Pre-Migration Database
+
+For existing deployments where tables were created outside of Alembic (e.g., via direct DDL or `Base.metadata.create_all` before Alembic was introduced):
+
+1. **Verify Schema Compatibility**: Ensure the existing database schema matches the expected models.
+2. **Stamp the Database**: Explicitly stamp the database with the baseline revision instead of running `alembic upgrade head`:
+   ```bash
+   alembic stamp 0001_initial_schema
+   # Then apply any subsequent migrations:
+   alembic upgrade head
+   ```
+   Or stamp directly to head if the database is already fully up-to-date with all migrations:
+   ```bash
+   alembic stamp head
+   ```
+
+Running `alembic upgrade head` on an unmanaged database with pre-existing tables will intentionally fail with table creation errors rather than silently adopting the tables.
