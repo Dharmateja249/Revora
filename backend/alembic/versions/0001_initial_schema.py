@@ -55,7 +55,7 @@ def upgrade() -> None:
     op.create_table(
         "recovery_opportunities",
         sa.Column("id", sa.Uuid(as_uuid=True), primary_key=True),
-        sa.Column("payment_id", sa.Uuid(as_uuid=True), sa.ForeignKey("payments.id", ondelete="CASCADE"), unique=True, nullable=False),
+        sa.Column("payment_id", sa.Uuid(as_uuid=True), sa.ForeignKey("payments.id", ondelete="CASCADE"), nullable=False),
         sa.Column("status", sa.String(50), nullable=False),
         sa.Column("revenue_at_risk", sa.Float(), nullable=False),
         sa.Column("expected_recovery", sa.Float(), nullable=False),

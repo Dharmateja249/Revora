@@ -103,7 +103,7 @@ def test_preexisting_unmanaged_table_fails_initial_migration(alembic_config_fact
         )
 
     # Attempting to run initial migration MUST fail because 'customers' already exists
-    with pytest.raises((OperationalError, DBAPIError, Exception)):
+    with pytest.raises((OperationalError, DBAPIError)):
         command.upgrade(cfg, "head")
 
     # Verify pre-existing unmanaged data was NOT dropped or deleted
