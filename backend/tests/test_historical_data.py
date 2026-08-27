@@ -3,6 +3,7 @@ import pytest
 import tempfile
 from pathlib import Path
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
@@ -16,6 +17,7 @@ from app.models import (
 from app.historical_data import (
     load_historical_data,
     validate_dataset_schema,
+    _parse_bool,
     EXPECTED_CSV_COLUMNS,
 )
 
@@ -132,9 +134,13 @@ def sample_csv_file(tmp_path):
     return csv_file
 
 
+# ---------------------------------------------------------------------------
+# Issue 1: Header Normalization Tests
+# ---------------------------------------------------------------------------
+
+
 def test_schema_validation_valid(sample_csv_file):
     """Verify that a valid CSV schema passes validation."""
-    # Should not raise
     validate_dataset_schema(sample_csv_file)
 
 
@@ -157,6 +163,260 @@ def test_schema_validation_nonexistent_file(tmp_path):
         validate_dataset_schema(missing_path)
 
 
+def test_whitespace_padded_headers_ingestion(db_session, tmp_path):
+    """
+    Regression Test 1: Whitespace-padded CSV headers like ' record_id ' are
+    properly normalized and successfully ingested into domain entities.
+    """
+    padded_csv = tmp_path / "padded_headers.csv"
+    padded_headers = [f"  {col}  " for col in EXPECTED_CSV_COLUMNS]
+
+    row_data = [
+        "rec_pad_001",
+        "cust_pad_100",
+        "pay_pad_200",
+        "5",
+        "0.8",
+        "1",
+        "1200.0",
+        "INR",
+        "card",
+        "bank_timeout",
+        "1",
+        "0.5",
+        "RETRY",
+        "",
+        "0",
+        "True",
+        "1200.0",
+        "1.0",
+    ]
+
+    with open(padded_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(padded_headers)
+        writer.writerow(row_data)
+
+    # Schema validation must pass
+    validate_dataset_schema(padded_csv)
+
+    # Ingestion must succeed without KeyError on normalized header names
+    summary = load_historical_data(db_session, csv_path=padded_csv)
+    assert summary["total_records_processed"] == 1
+    assert summary["attempts_created"] == 1
+    assert summary["customers_created"] == 1
+    assert summary["payments_created"] == 1
+
+    attempt = db_session.query(RecoveryAttempt).filter_by(external_reference="rec_pad_001").one()
+    assert attempt.opportunity.payment.external_payment_id == "pay_pad_200"
+    assert attempt.opportunity.payment.customer.external_customer_id == "cust_pad_100"
+
+
+# ---------------------------------------------------------------------------
+# Issue 2: Strict Boolean Parsing Tests
+# ---------------------------------------------------------------------------
+
+
+def test_parse_bool_valid():
+    """Verify _parse_bool accepts valid boolean representations."""
+    assert _parse_bool(True) is True
+    assert _parse_bool(False) is False
+    assert _parse_bool("True") is True
+    assert _parse_bool("true") is True
+    assert _parse_bool("TRUE") is True
+    assert _parse_bool(" 1 ") is True
+    assert _parse_bool("1") is True
+    assert _parse_bool("False") is False
+    assert _parse_bool("false") is False
+    assert _parse_bool("FALSE") is False
+    assert _parse_bool(" 0 ") is False
+    assert _parse_bool("0") is False
+
+
+def test_parse_bool_invalid():
+    """
+    Regression Test 2: Unknown or ambiguous boolean strings must raise ValueError
+    rather than silently evaluating to False.
+    """
+    invalid_cases = [
+        "",
+        "   ",
+        "Falsee",
+        "Truee",
+        "unknown",
+        "maybe",
+        "2",
+        "-1",
+        "null",
+        "None",
+        None,
+    ]
+    for case in invalid_cases:
+        with pytest.raises(ValueError, match="Invalid boolean value for recovered"):
+            _parse_bool(case)
+
+
+def test_ingestion_rejects_corrupted_recovered_value(db_session, tmp_path):
+    """Verify load_historical_data fails fast on corrupted recovered boolean values."""
+    corrupted_csv = tmp_path / "corrupted_recovered.csv"
+    with open(corrupted_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=EXPECTED_CSV_COLUMNS)
+        writer.writeheader()
+        writer.writerow({
+            "record_id": "rec_corrupt_1",
+            "customer_id": "cust_1",
+            "payment_id": "pay_1",
+            "customer_payment_count": 1,
+            "customer_success_rate": 1.0,
+            "customer_previous_failures": 0,
+            "payment_amount": 100.0,
+            "currency": "INR",
+            "payment_method": "card",
+            "failure_reason": "bank_timeout",
+            "attempt_number": 1,
+            "hours_since_failure": 0.5,
+            "action_taken": "RETRY",
+            "previous_action": "",
+            "previous_attempt_count": 0,
+            "recovered": "UNKNOWN_VALUE",  # Invalid
+            "amount_recovered": 0.0,
+            "recovery_time_hours": 0.0,
+        })
+
+    with pytest.raises(ValueError, match="Invalid boolean value for recovered"):
+        load_historical_data(db_session, csv_path=corrupted_csv)
+
+
+# ---------------------------------------------------------------------------
+# Issue 3: Early Duplicate Check & DB Uniqueness Tests
+# ---------------------------------------------------------------------------
+
+
+def test_early_duplicate_check_prevents_unintended_entities(db_session, tmp_path):
+    """
+    Regression Test 3: If a record_id is already ingested, a duplicate row with
+    a different customer/payment ID must be rejected before entity resolution,
+    creating NO unintended Customer, Payment, RecoveryOpportunity, or AuditEvent.
+    """
+    dup_csv = tmp_path / "dup_records.csv"
+    rows = [
+        {
+            "record_id": "rec_fixed_id",
+            "customer_id": "cust_original",
+            "payment_id": "pay_original",
+            "customer_payment_count": 5,
+            "customer_success_rate": 0.8,
+            "customer_previous_failures": 1,
+            "payment_amount": 2000.0,
+            "currency": "INR",
+            "payment_method": "card",
+            "failure_reason": "bank_timeout",
+            "attempt_number": 1,
+            "hours_since_failure": 1.0,
+            "action_taken": "RETRY",
+            "previous_action": "",
+            "previous_attempt_count": 0,
+            "recovered": "True",
+            "amount_recovered": 2000.0,
+            "recovery_time_hours": 1.5,
+        },
+        {
+            "record_id": "rec_fixed_id",  # DUPLICATE record_id with rogue new customer/payment
+            "customer_id": "cust_rogue_duplicate",
+            "payment_id": "pay_rogue_duplicate",
+            "customer_payment_count": 99,
+            "customer_success_rate": 0.1,
+            "customer_previous_failures": 90,
+            "payment_amount": 99999.0,
+            "currency": "INR",
+            "payment_method": "upi",
+            "failure_reason": "unknown",
+            "attempt_number": 1,
+            "hours_since_failure": 2.0,
+            "action_taken": "STOP",
+            "previous_action": "",
+            "previous_attempt_count": 0,
+            "recovered": "False",
+            "amount_recovered": 0.0,
+            "recovery_time_hours": 0.0,
+        },
+    ]
+
+    with open(dup_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=EXPECTED_CSV_COLUMNS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    summary = load_historical_data(db_session, csv_path=dup_csv)
+
+    assert summary["total_records_processed"] == 2
+    assert summary["attempts_created"] == 1
+    assert summary["skipped_duplicate_attempts"] == 1
+    assert summary["customers_created"] == 1
+    assert summary["payments_created"] == 1
+    assert summary["opportunities_created"] == 1
+    assert summary["audit_events_created"] == 1
+
+    # Verify rogue customer and payment were never created
+    assert db_session.query(Customer).filter_by(external_customer_id="cust_rogue_duplicate").count() == 0
+    assert db_session.query(Payment).filter_by(external_payment_id="pay_rogue_duplicate").count() == 0
+    assert db_session.query(Customer).count() == 1
+    assert db_session.query(Payment).count() == 1
+
+
+def test_recovery_attempt_external_reference_unique_constraint(db_session):
+    """
+    Verify that the database schema enforces uniqueness on RecoveryAttempt.external_reference.
+    """
+    customer = Customer(name="Test Cust", email="cust@test.com")
+    db_session.add(customer)
+    db_session.commit()
+
+    payment = Payment(
+        customer_id=customer.id,
+        amount=100.0,
+        currency="INR",
+        payment_method="card",
+        status="failed",
+    )
+    db_session.add(payment)
+    db_session.commit()
+
+    opp = RecoveryOpportunity(
+        payment_id=payment.id,
+        status="failed",
+        revenue_at_risk=100.0,
+        expected_recovery=0.0,
+    )
+    db_session.add(opp)
+    db_session.commit()
+
+    att1 = RecoveryAttempt(
+        opportunity_id=opp.id,
+        action="RETRY",
+        status="failed",
+        external_reference="rec_duplicate_check",
+    )
+    db_session.add(att1)
+    db_session.commit()
+
+    # Attempt to insert identical external_reference
+    att2 = RecoveryAttempt(
+        opportunity_id=opp.id,
+        action="PAYMENT_LINK",
+        status="succeeded",
+        external_reference="rec_duplicate_check",
+    )
+    db_session.add(att2)
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+
+
+# ---------------------------------------------------------------------------
+# General Ingestion, Relationships, Outcomes & Integration Tests
+# ---------------------------------------------------------------------------
+
+
 def test_successful_ingestion(db_session, sample_csv_file):
     """Verify successful ingestion of records into database entities."""
     summary = load_historical_data(db_session, csv_path=sample_csv_file)
@@ -169,7 +429,6 @@ def test_successful_ingestion(db_session, sample_csv_file):
     assert summary["audit_events_created"] == 4
     assert summary["skipped_duplicate_attempts"] == 0
 
-    # Verify counts in DB
     assert db_session.query(Customer).count() == 2
     assert db_session.query(Payment).count() == 3
     assert db_session.query(RecoveryOpportunity).count() == 3
@@ -184,14 +443,12 @@ def test_customer_and_payment_deduplication(db_session, sample_csv_file):
     """
     load_historical_data(db_session, csv_path=sample_csv_file)
 
-    # cust_101 has 2 payments (pay_201 with 1 attempt, pay_202 with 2 attempts)
     customer_101 = db_session.query(Customer).filter_by(external_customer_id="cust_101").one()
     assert customer_101.total_payments == 10
     assert customer_101.successful_payments == 8
     assert customer_101.failed_payments == 2
     assert len(customer_101.payments) == 2
 
-    # pay_202 has 2 attempts on its recovery opportunity
     payment_202 = db_session.query(Payment).filter_by(external_payment_id="pay_202").one()
     assert payment_202.customer_id == customer_101.id
     assert payment_202.recovery_opportunity is not None
@@ -238,7 +495,6 @@ def test_recovered_vs_failed_outcomes(db_session, sample_csv_file):
     attempt_3 = db_session.query(RecoveryAttempt).filter_by(external_reference="rec_003").one()
     assert attempt_2.status == "failed"
     assert attempt_3.status == "succeeded"
-    # Overall opportunity & payment reflect recovery
     assert attempt_2.opportunity.status == "recovered"
     assert attempt_2.opportunity.payment.status == "succeeded"
 
@@ -283,25 +539,42 @@ def test_repeated_ingestion_idempotency(db_session, sample_csv_file):
 def test_ingest_actual_historical_dataset(db_session):
     """
     Integration test: Ingest the actual 5,000-record synthetic historical dataset
-    located at data/historical_recovery_data.csv.
+    located at data/historical_recovery_data.csv and verify precise entity counts.
     """
     csv_path = Path(__file__).resolve().parent.parent.parent / "data" / "historical_recovery_data.csv"
     if not csv_path.exists():
         pytest.skip("Historical dataset CSV not found at expected repo path.")
 
+    # 1. First ingestion
     summary = load_historical_data(db_session, csv_path=csv_path)
 
     assert summary["total_records_processed"] == 5000
+    assert summary["customers_created"] == 1478
+    assert summary["payments_created"] == 3656
+    assert summary["opportunities_created"] == 3656
     assert summary["attempts_created"] == 5000
-    assert summary["customers_created"] > 0
-    assert summary["payments_created"] > 0
-    assert summary["opportunities_created"] == summary["payments_created"]
     assert summary["audit_events_created"] == 5000
+    assert summary["skipped_duplicate_attempts"] == 0
 
-    # Verify that recovered amounts match
-    recovered_attempts = (
-        db_session.query(RecoveryAttempt)
-        .filter(RecoveryAttempt.status == "succeeded")
-        .count()
-    )
-    assert recovered_attempts > 0
+    assert db_session.query(Customer).count() == 1478
+    assert db_session.query(Payment).count() == 3656
+    assert db_session.query(RecoveryOpportunity).count() == 3656
+    assert db_session.query(RecoveryAttempt).count() == 5000
+    assert db_session.query(AuditEvent).count() == 5000
+
+    # 2. Second ingestion produces zero duplicate entities
+    summary_2 = load_historical_data(db_session, csv_path=csv_path)
+
+    assert summary_2["total_records_processed"] == 5000
+    assert summary_2["customers_created"] == 0
+    assert summary_2["payments_created"] == 0
+    assert summary_2["opportunities_created"] == 0
+    assert summary_2["attempts_created"] == 0
+    assert summary_2["audit_events_created"] == 0
+    assert summary_2["skipped_duplicate_attempts"] == 5000
+
+    assert db_session.query(Customer).count() == 1478
+    assert db_session.query(Payment).count() == 3656
+    assert db_session.query(RecoveryOpportunity).count() == 3656
+    assert db_session.query(RecoveryAttempt).count() == 5000
+    assert db_session.query(AuditEvent).count() == 5000

@@ -19,6 +19,7 @@ backend_root = Path(__file__).resolve().parent.parent
 if str(backend_root) not in sys.path:
     sys.path.insert(0, str(backend_root))
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal, init_db
@@ -75,7 +76,7 @@ def validate_dataset_schema(filepath: str | Path) -> None:
         except StopIteration:
             raise ValueError(f"Historical dataset file is empty: {path}")
 
-    header_clean = [col.strip() for col in header]
+    header_clean = [col.strip() for col in header if col is not None]
     missing_columns = [col for col in EXPECTED_CSV_COLUMNS if col not in header_clean]
 
     if missing_columns:
@@ -85,10 +86,26 @@ def validate_dataset_schema(filepath: str | Path) -> None:
 
 
 def _parse_bool(val: Any) -> bool:
-    """Parse boolean value from various string/bool representations."""
+    """
+    Strictly parse and validate a boolean value from boolean or string representation.
+
+    Accepts:
+    - bool: True, False
+    - str (case-insensitive, trimmed): 'true', '1' -> True; 'false', '0' -> False
+
+    Raises:
+        ValueError: If value is not a recognized boolean representation.
+    """
     if isinstance(val, bool):
         return val
-    return str(val).strip().lower() in ("true", "1", "t", "yes", "y")
+    if val is None:
+        raise ValueError("Invalid boolean value for recovered: None")
+    s = str(val).strip().lower()
+    if s in ("true", "1"):
+        return True
+    if s in ("false", "0"):
+        return False
+    raise ValueError(f"Invalid boolean value for recovered: {val!r}")
 
 
 def load_historical_data(
@@ -100,10 +117,11 @@ def load_historical_data(
     Ingest verified historical recovery data from a CSV file into the database.
 
     Features:
-    - Schema validation prior to ingestion
+    - Schema validation prior to ingestion with header whitespace normalization
+    - Early record_id duplicate checking before entity resolution
     - Entity deduplication (Customer, Payment, RecoveryOpportunity)
     - Attempt deduplication via external_reference (record_id) for safe re-runs
-    - Deterministic mapping preserving relational integrity
+    - Concurrency-safe nested transaction handling for uniqueness conflicts
     - Domain rule enforcement: only recovered=True creates succeeded recovery outcomes
 
     Args:
@@ -146,12 +164,15 @@ def load_historical_data(
         "skipped_duplicate_attempts": 0,
     }
 
-    # Read and parse all CSV rows
+    # Read and parse all CSV rows with normalized headers
     records: List[Dict[str, Any]] = []
     with open(path, mode="r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
+        if reader.fieldnames:
+            reader.fieldnames = [col.strip() for col in reader.fieldnames if col is not None]
         for row in reader:
-            records.append(row)
+            clean_row = {k.strip(): v for k, v in row.items() if k is not None}
+            records.append(clean_row)
 
     # Sort deterministically by payment_id and attempt_number
     def sort_key(r: Dict[str, Any]):
@@ -163,10 +184,16 @@ def load_historical_data(
         counts["total_records_processed"] += 1
 
         rec_id = row["record_id"].strip()
+
+        # Requirement 3: Early duplicate record_id check before ANY entity resolution
+        if rec_id in existing_attempts_by_ref:
+            counts["skipped_duplicate_attempts"] += 1
+            continue
+
         cust_id = row["customer_id"].strip()
         pay_id = row["payment_id"].strip()
 
-        # Parse numeric and boolean fields
+        # Parse numeric and boolean fields (strict validation on boolean)
         payment_amount = float(row["payment_amount"])
         currency = row.get("currency", "INR").strip()
         payment_method = row["payment_method"].strip()
@@ -183,103 +210,123 @@ def load_historical_data(
         cust_prev_failures = int(row["customer_previous_failures"])
         cust_successful_payments = max(0, cust_payment_count - cust_prev_failures)
 
-        # 1. Customer Resolution / Creation
-        if cust_id in existing_customers:
-            customer = existing_customers[cust_id]
-        else:
-            customer = Customer(
-                external_customer_id=cust_id,
-                name=f"Customer {cust_id}",
-                email=f"{cust_id}@revora-demo.internal",
-                total_payments=cust_payment_count,
-                successful_payments=cust_successful_payments,
-                failed_payments=cust_prev_failures,
-            )
-            db_session.add(customer)
-            existing_customers[cust_id] = customer
-            counts["customers_created"] += 1
+        # Execute row ingestion inside a savepoint to ensure race-condition duplicates
+        # do not leave partially created domain entities or audit events
+        try:
+            with db_session.begin_nested():
+                new_customer: Optional[Customer] = None
+                new_payment: Optional[Payment] = None
+                new_opportunity: Optional[RecoveryOpportunity] = None
 
-        # 2. Payment Resolution / Creation
-        if pay_id in existing_payments:
-            payment = existing_payments[pay_id]
-            # If this subsequent attempt succeeded, update payment status to succeeded
-            if is_recovered and payment.status != "succeeded":
-                payment.status = "succeeded"
-        else:
-            # Payment status: 'succeeded' if this attempt recovered, else 'failed'
-            initial_status = "succeeded" if is_recovered else "failed"
-            payment = Payment(
-                external_payment_id=pay_id,
-                customer=customer,
-                amount=payment_amount,
-                currency=currency,
-                payment_method=payment_method,
-                status=initial_status,
-                failure_reason=failure_reason,
-            )
-            db_session.add(payment)
-            existing_payments[pay_id] = payment
-            counts["payments_created"] += 1
+                # 1. Customer Resolution / Creation
+                if cust_id in existing_customers:
+                    customer = existing_customers[cust_id]
+                else:
+                    customer = Customer(
+                        external_customer_id=cust_id,
+                        name=f"Customer {cust_id}",
+                        email=f"{cust_id}@revora-demo.internal",
+                        total_payments=cust_payment_count,
+                        successful_payments=cust_successful_payments,
+                        failed_payments=cust_prev_failures,
+                    )
+                    db_session.add(customer)
+                    new_customer = customer
 
-        # 3. RecoveryOpportunity Resolution / Creation (1:1 with Payment)
-        if payment.recovery_opportunity is not None:
-            opportunity = payment.recovery_opportunity
-            # Update opportunity outcome if recovered
-            if is_recovered:
-                opportunity.status = "recovered"
-                opportunity.expected_recovery = amount_recovered
-        else:
-            opp_status = "recovered" if is_recovered else "failed"
-            opportunity = RecoveryOpportunity(
-                payment=payment,
-                status=opp_status,
-                revenue_at_risk=payment_amount,
-                expected_recovery=amount_recovered if is_recovered else 0.0,
-                recommended_action=action_taken,
-                confidence=cust_success_rate,
-            )
-            db_session.add(opportunity)
-            counts["opportunities_created"] += 1
+                # 2. Payment Resolution / Creation
+                if pay_id in existing_payments:
+                    payment = existing_payments[pay_id]
+                    if is_recovered and payment.status != "succeeded":
+                        payment.status = "succeeded"
+                else:
+                    initial_status = "succeeded" if is_recovered else "failed"
+                    payment = Payment(
+                        external_payment_id=pay_id,
+                        customer=customer,
+                        amount=payment_amount,
+                        currency=currency,
+                        payment_method=payment_method,
+                        status=initial_status,
+                        failure_reason=failure_reason,
+                    )
+                    db_session.add(payment)
+                    new_payment = payment
 
-        # 4. RecoveryAttempt Creation (Idempotent check)
-        if rec_id in existing_attempts_by_ref:
+                # 3. RecoveryOpportunity Resolution / Creation (1:1 with Payment)
+                if payment.recovery_opportunity is not None:
+                    opportunity = payment.recovery_opportunity
+                    if is_recovered:
+                        opportunity.status = "recovered"
+                        opportunity.expected_recovery = amount_recovered
+                else:
+                    opp_status = "recovered" if is_recovered else "failed"
+                    opportunity = RecoveryOpportunity(
+                        payment=payment,
+                        status=opp_status,
+                        revenue_at_risk=payment_amount,
+                        expected_recovery=amount_recovered if is_recovered else 0.0,
+                        recommended_action=action_taken,
+                        confidence=cust_success_rate,
+                    )
+                    db_session.add(opportunity)
+                    new_opportunity = opportunity
+
+                # 4. RecoveryAttempt Creation
+                attempt_status = "succeeded" if is_recovered else "failed"
+                attempt = RecoveryAttempt(
+                    opportunity=opportunity,
+                    action=action_taken,
+                    status=attempt_status,
+                    amount_recovered=amount_recovered,
+                    external_reference=rec_id,
+                    error_code=failure_reason if not is_recovered else None,
+                )
+                db_session.add(attempt)
+
+                # 5. AuditEvent Creation for Historical Verification Tracking
+                audit_event = AuditEvent(
+                    opportunity=opportunity,
+                    event_type="historical_outcome_ingested",
+                    description=(
+                        f"Ingested verified historical attempt #{attempt_number} ({action_taken}) "
+                        f"with outcome: {attempt_status} (recovered={is_recovered})."
+                    ),
+                    metadata_payload={
+                        "record_id": rec_id,
+                        "attempt_number": attempt_number,
+                        "action_taken": action_taken,
+                        "recovered": is_recovered,
+                        "amount_recovered": amount_recovered,
+                        "recovery_time_hours": recovery_time_hours,
+                        "hours_since_failure": hours_since_failure,
+                        "customer_success_rate": cust_success_rate,
+                        "failure_reason": failure_reason,
+                    },
+                )
+                db_session.add(audit_event)
+
+                # Flush to immediately enforce uniqueness constraint on external_reference
+                db_session.flush()
+
+        except IntegrityError:
+            # Race condition / duplicate external_reference caught by DB constraint
+            # Nested transaction was automatically rolled back by begin_nested() context manager
+            existing_attempts_by_ref.add(rec_id)
             counts["skipped_duplicate_attempts"] += 1
             continue
 
-        attempt_status = "succeeded" if is_recovered else "failed"
-        attempt = RecoveryAttempt(
-            opportunity=opportunity,
-            action=action_taken,
-            status=attempt_status,
-            amount_recovered=amount_recovered,
-            external_reference=rec_id,
-            error_code=failure_reason if not is_recovered else None,
-        )
-        db_session.add(attempt)
+        # Register successful creation in tracking caches and counters
+        if new_customer is not None:
+            existing_customers[cust_id] = new_customer
+            counts["customers_created"] += 1
+        if new_payment is not None:
+            existing_payments[pay_id] = new_payment
+            counts["payments_created"] += 1
+        if new_opportunity is not None:
+            counts["opportunities_created"] += 1
+
         existing_attempts_by_ref.add(rec_id)
         counts["attempts_created"] += 1
-
-        # 5. AuditEvent Creation for Historical Verification Tracking
-        audit_event = AuditEvent(
-            opportunity=opportunity,
-            event_type="historical_outcome_ingested",
-            description=(
-                f"Ingested verified historical attempt #{attempt_number} ({action_taken}) "
-                f"with outcome: {attempt_status} (recovered={is_recovered})."
-            ),
-            metadata_payload={
-                "record_id": rec_id,
-                "attempt_number": attempt_number,
-                "action_taken": action_taken,
-                "recovered": is_recovered,
-                "amount_recovered": amount_recovered,
-                "recovery_time_hours": recovery_time_hours,
-                "hours_since_failure": hours_since_failure,
-                "customer_success_rate": cust_success_rate,
-                "failure_reason": failure_reason,
-            },
-        )
-        db_session.add(audit_event)
         counts["audit_events_created"] += 1
 
         # Periodic commit for batch efficiency
