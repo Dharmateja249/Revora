@@ -363,3 +363,20 @@ def test_default_empty_decision_basis_is_immutable():
     )
     with pytest.raises(TypeError):
         decision.decision_basis["new_key"] = "val"  # type: ignore
+
+
+def test_explicit_none_decision_basis_is_normalized_to_immutable_mapping():
+    """
+    Regression Test: explicitly passing decision_basis=None must be normalized
+    before Pydantic type validation into an empty immutable mapping.
+    """
+    decision = RecoveryDecision(
+        recommended_action=RecoveryAction.NO_ACTION,
+        reason="Explicit None test",
+        confidence=1.0,
+        decision_basis=None,  # type: ignore
+    )
+
+    assert decision.decision_basis == {}
+    with pytest.raises(TypeError):
+        decision.decision_basis["new_key"] = "val"  # type: ignore

@@ -51,6 +51,13 @@ class RecoveryDecision(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     decision_basis: Mapping[str, Any] = Field(default_factory=dict)
 
+    @field_validator("decision_basis", mode="before")
+    @classmethod
+    def _normalize_none_decision_basis(cls, v: Any) -> Any:
+        if v is None:
+            return {}
+        return v
+
     @field_validator("decision_basis", mode="after")
     @classmethod
     def _ensure_immutable_decision_basis(cls, v: Any) -> Mapping[str, Any]:
