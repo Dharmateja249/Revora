@@ -181,6 +181,22 @@ def test_customer_authentication_failure():
         assert decision.decision_basis["rule_matched"] == "CustomerInteractionPaymentLinkRule"
 
 
+def test_otp_timeout_classified_as_customer_interaction_regression():
+    """
+    Regression Test: otp_timeout contains 'timeout' (which is in TRANSIENT_TECHNICAL_REASONS),
+    but because otp_timeout is an explicit customer interaction reason, exact category matching
+    must take precedence and classify it as customer_interaction producing PAYMENT_LINK.
+    """
+    ctx = _build_test_context(failure_reason="otp_timeout")
+    decision = evaluate_recovery_decision(ctx)
+
+    assert decision.recommended_action == RecoveryAction.PAYMENT_LINK
+    assert decision.recommended_action != RecoveryAction.RETRY_PAYMENT
+    assert decision.confidence == 0.80
+    assert decision.decision_basis["rule_matched"] == "CustomerInteractionPaymentLinkRule"
+
+
+
 def test_insufficient_funds_with_historical_affinity():
     """Verify customer with previous successful payment link recovery receives payment link on insufficient funds."""
     ctx = _build_test_context(

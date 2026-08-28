@@ -146,6 +146,30 @@ class DecisionEngine:
             "historical_failed_actions": context.recovery_statistics.previously_failed_actions,
         }
 
+        # Determine exact category match before any substring fallback
+        exact_category: Optional[str] = None
+        if failure_reason in PERMANENT_FAILURE_REASONS:
+            exact_category = "permanent"
+        elif failure_reason in CUSTOMER_INTERACTION_REASONS:
+            exact_category = "customer_interaction"
+        elif failure_reason in INSUFFICIENT_FUNDS_REASONS:
+            exact_category = "insufficient_funds"
+        elif failure_reason in TRANSIENT_TECHNICAL_REASONS:
+            exact_category = "transient"
+
+        is_permanent = (exact_category == "permanent") or (
+            exact_category is None and any(term in failure_reason for term in PERMANENT_FAILURE_REASONS)
+        )
+        is_transient = (exact_category == "transient") or (
+            exact_category is None and any(term in failure_reason for term in TRANSIENT_TECHNICAL_REASONS)
+        )
+        is_insufficient_funds = (exact_category == "insufficient_funds") or (
+            exact_category is None and any(term in failure_reason for term in INSUFFICIENT_FUNDS_REASONS)
+        )
+        is_customer_interaction = (exact_category == "customer_interaction") or (
+            exact_category is None and any(term in failure_reason for term in CUSTOMER_INTERACTION_REASONS)
+        )
+
         # Rule 1: Already Recovered or Resolved Payment
         if current_payment is None or current_opportunity is None:
             return RecoveryDecision(
@@ -173,7 +197,7 @@ class DecisionEngine:
             )
 
         # Rule 3: Permanent Credential Failure (card expired, invalid CVV, closed account)
-        if any(term in failure_reason for term in PERMANENT_FAILURE_REASONS):
+        if is_permanent:
             return RecoveryDecision(
                 recommended_action=RecoveryAction.CHANGE_PAYMENT_METHOD,
                 reason=f"Permanent payment failure detected ({failure_reason_raw}); customer must update payment method.",
@@ -182,7 +206,7 @@ class DecisionEngine:
             )
 
         # Rule 4: Transient Technical / Bank Failure (gateway down, timeout)
-        if any(term in failure_reason for term in TRANSIENT_TECHNICAL_REASONS):
+        if is_transient:
             if RecoveryAction.RETRY_PAYMENT not in attempted_actions_normalized:
                 return RecoveryDecision(
                     recommended_action=RecoveryAction.RETRY_PAYMENT,
@@ -206,7 +230,7 @@ class DecisionEngine:
                 )
 
         # Rule 5: Insufficient Funds / Balance Limits
-        if any(term in failure_reason for term in INSUFFICIENT_FUNDS_REASONS):
+        if is_insufficient_funds:
             # Check historical customer affinity
             hist_successful = [
                 normalize_action_name(a) for a in context.recovery_statistics.previously_successful_actions
@@ -242,7 +266,7 @@ class DecisionEngine:
                 )
 
         # Rule 6: Customer Interaction / Authentication Failure (3DS, OTP, User Cancelled)
-        if any(term in failure_reason for term in CUSTOMER_INTERACTION_REASONS):
+        if is_customer_interaction:
             if RecoveryAction.PAYMENT_LINK not in attempted_actions_normalized:
                 return RecoveryDecision(
                     recommended_action=RecoveryAction.PAYMENT_LINK,
