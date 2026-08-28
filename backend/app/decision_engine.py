@@ -6,10 +6,22 @@ deterministic rules to produce a RecoveryDecision recommendation without ML or L
 """
 
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set
-from pydantic import BaseModel, ConfigDict, Field
+import types
+from typing import Any, Dict, List, Mapping, Optional, Set
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.context import CustomerRecoveryContext
+
+
+def _freeze_nested(value: Any) -> Any:
+    """Recursively freeze dictionaries to MappingProxyType and sequences to tuples."""
+    if isinstance(value, (dict, types.MappingProxyType)):
+        return types.MappingProxyType({k: _freeze_nested(v) for k, v in value.items()})
+    if isinstance(value, (list, set)):
+        return tuple(_freeze_nested(v) for v in value)
+    if isinstance(value, tuple):
+        return tuple(_freeze_nested(v) for v in value)
+    return value
 
 
 class RecoveryAction(str, Enum):
@@ -27,12 +39,25 @@ class RecoveryDecision(BaseModel):
     Immutable decision contract produced by the deterministic recovery decision engine.
     """
 
-    model_config = ConfigDict(frozen=True, from_attributes=True)
+    model_config = ConfigDict(
+        frozen=True,
+        from_attributes=True,
+        arbitrary_types_allowed=True,
+        validate_default=True,
+    )
 
     recommended_action: RecoveryAction
     reason: str
     confidence: float = Field(ge=0.0, le=1.0)
-    decision_basis: Dict[str, Any] = Field(default_factory=dict)
+    decision_basis: Mapping[str, Any] = Field(default_factory=dict)
+
+    @field_validator("decision_basis", mode="after")
+    @classmethod
+    def _ensure_immutable_decision_basis(cls, v: Any) -> Mapping[str, Any]:
+        if v is None:
+            return types.MappingProxyType({})
+        return _freeze_nested(v)
+
 
 
 # Failure Reason Classification Sets (Normalized lowercase)

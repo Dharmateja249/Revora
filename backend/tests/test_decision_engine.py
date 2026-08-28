@@ -300,3 +300,66 @@ def test_confidence_bounds_enforcement():
             reason="Invalid confidence",
             confidence=-0.1,
         )
+
+
+def test_decision_basis_recursive_immutability():
+    """Verify direct, nested dictionary, and nested sequence mutation prevention on decision_basis."""
+    mutable_input_basis = {
+        "rule_matched": "TestRule",
+        "attempted_actions": ["retry_payment", "wait_and_retry"],
+        "nested_metadata": {
+            "gateway": "stripe",
+            "flags": ["high_risk", "auto_retry"],
+        },
+    }
+
+    decision = RecoveryDecision(
+        recommended_action=RecoveryAction.RETRY_PAYMENT,
+        reason="Test recursive immutability",
+        confidence=0.85,
+        decision_basis=mutable_input_basis,
+    )
+
+    # 1. Direct mutation of decision_basis
+    with pytest.raises(TypeError):
+        decision.decision_basis["rule_matched"] = "MutatedRule"  # type: ignore
+
+    with pytest.raises(TypeError):
+        decision.decision_basis["new_key"] = "new_val"  # type: ignore
+
+    # 2. Nested dictionary mutation
+    with pytest.raises(TypeError):
+        decision.decision_basis["nested_metadata"]["gateway"] = "razorpay"  # type: ignore
+
+    with pytest.raises(TypeError):
+        decision.decision_basis["nested_metadata"]["new_field"] = 123  # type: ignore
+
+    # 3. Nested sequence mutation
+    with pytest.raises((AttributeError, TypeError)):
+        decision.decision_basis["attempted_actions"].append("payment_link")  # type: ignore
+
+    with pytest.raises(TypeError):
+        decision.decision_basis["attempted_actions"][0] = "mutated_action"  # type: ignore
+
+    with pytest.raises((AttributeError, TypeError)):
+        decision.decision_basis["nested_metadata"]["flags"].append("fraud")  # type: ignore
+
+    # 4. Confirmation that original decision metadata remains unchanged when input dict is mutated
+    mutable_input_basis["rule_matched"] = "ExternallyMutated"
+    mutable_input_basis["attempted_actions"].append("external_append")
+    mutable_input_basis["nested_metadata"]["gateway"] = "external_gateway"
+
+    assert decision.decision_basis["rule_matched"] == "TestRule"
+    assert decision.decision_basis["attempted_actions"] == ("retry_payment", "wait_and_retry")
+    assert decision.decision_basis["nested_metadata"]["gateway"] == "stripe"
+
+
+def test_default_empty_decision_basis_is_immutable():
+    """Verify that default decision_basis is also an immutable mapping."""
+    decision = RecoveryDecision(
+        recommended_action=RecoveryAction.NO_ACTION,
+        reason="Default test",
+        confidence=1.0,
+    )
+    with pytest.raises(TypeError):
+        decision.decision_basis["new_key"] = "val"  # type: ignore
