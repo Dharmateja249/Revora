@@ -19,7 +19,6 @@ from app.hybrid_historical_retriever import HybridHistoricalRetriever
 from app.retrieval_document import historical_case_to_document
 from app.semantic_historical_retriever import SemanticHistoricalRetriever
 from app.vector_index import VectorIndex
-from tests.fixtures.retrieval_golden_dataset import get_golden_evaluation_cases
 
 
 def populate_benchmark_vector_index(
@@ -27,11 +26,15 @@ def populate_benchmark_vector_index(
     embedding_service: Optional[EmbeddingService] = None,
 ) -> VectorIndex:
     """
-    Populate a VectorIndex with all historical payment documents from the evaluation cases.
+    Populate a VectorIndex with all historical payment documents from the evaluation cases,
+    including both same-customer precedents and foreign-customer negative cases.
 
     Ensures that semantic and hybrid retrievers have access to the exact candidate corpus
-    represented across the benchmark.
+    represented across the benchmark, preserving true customer_id attributes for tenant isolation testing.
     """
+    if evaluation_cases is None:
+        raise ValueError("evaluation_cases must be provided to populate benchmark vector index.")
+
     svc = embedding_service or get_embedding_service()
     vector_index = VectorIndex(dimension=svc.dimension)
 
@@ -41,6 +44,7 @@ def populate_benchmark_vector_index(
         customer_id = case.context.customer.customer_id
         ext_cust_id = case.context.customer.external_customer_id
 
+        # 1. Index primary customer historical payments
         for hp in case.context.historical_payments:
             if hp.payment_id in indexed_payment_ids:
                 continue
@@ -66,11 +70,30 @@ def populate_benchmark_vector_index(
             vector_index.add(doc, vec)
             indexed_payment_ids.add(hp.payment_id)
 
+        # 2. Index foreign-customer historical payment cases (tenant isolation negatives)
+        foreign_cases = case.metadata.get("foreign_historical_cases", ())
+        for fc in foreign_cases:
+            fc_obj: HistoricalCase
+            if isinstance(fc, HistoricalCase):
+                fc_obj = fc
+            elif isinstance(fc, dict):
+                fc_obj = HistoricalCase(**fc)
+            else:
+                continue
+
+            if fc_obj.payment_id in indexed_payment_ids:
+                continue
+
+            doc = historical_case_to_document(fc_obj)
+            vec = svc.embed(doc.text)
+            vector_index.add(doc, vec)
+            indexed_payment_ids.add(fc_obj.payment_id)
+
     return vector_index
 
 
 def run_benchmark(
-    evaluation_cases: Optional[Sequence[EvaluationCase]] = None,
+    evaluation_cases: Sequence[EvaluationCase],
     k_values: Sequence[int] = (1, 3, 5, 10),
     embedding_service: Optional[EmbeddingService] = None,
 ) -> Dict[str, RetrieverBenchmarkReport]:
@@ -78,14 +101,17 @@ def run_benchmark(
     Execute benchmark evaluation across all three Revora historical retrievers.
 
     Args:
-        evaluation_cases: Sequence of EvaluationCase instances (defaults to golden dataset).
+        evaluation_cases: Sequence of EvaluationCase instances.
         k_values: Ranking depths to evaluate (defaults to (1, 3, 5, 10)).
         embedding_service: EmbeddingService instance for semantic components.
 
     Returns:
         Dictionary mapping retriever name to its RetrieverBenchmarkReport.
     """
-    cases = tuple(evaluation_cases) if evaluation_cases is not None else get_golden_evaluation_cases()
+    if evaluation_cases is None:
+        raise ValueError("evaluation_cases must be explicitly provided to run_benchmark.")
+
+    cases = tuple(evaluation_cases)
     svc = embedding_service or get_embedding_service()
 
     # 1. Populate shared vector index for semantic evaluation

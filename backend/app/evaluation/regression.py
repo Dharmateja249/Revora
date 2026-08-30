@@ -193,6 +193,10 @@ class RegressionAnalysis(BaseModel):
     def _freeze_metadata(cls, v: Any) -> Mapping[str, Any]:
         return _freeze_nested(v) if v is not None else types.MappingProxyType({})
 
+    @field_serializer("metadata")
+    def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> Dict[str, Any]:
+        return _unfreeze_for_serialization(v)
+
 
 def _compute_deltas(baseline: float, candidate: float) -> Tuple[float, float]:
     """Calculate absolute and relative percentage deltas safely."""
@@ -231,15 +235,21 @@ def find_worst_query_regressions(
     }
 
     # Extract target K from metric if present
+    is_mrr = "mrr" in metric.lower() or "reciprocal" in metric.lower()
     target_k = 3
     for part in metric.split("_"):
         if part.isdigit():
             target_k = int(part)
 
     diagnostics: List[QueryRegressionDiagnostic] = []
+    seen_mrr_queries: Set[Tuple[UUID, str]] = set()
 
     for cand_res in candidate_results:
-        if cand_res.k != target_k and "mrr" not in metric.lower():
+        if is_mrr:
+            mrr_key = (cand_res.query_id, cand_res.retriever_name)
+            if mrr_key in seen_mrr_queries:
+                continue
+        elif cand_res.k != target_k:
             continue
 
         key = (cand_res.query_id, cand_res.k, cand_res.retriever_name)
@@ -254,13 +264,16 @@ def find_worst_query_regressions(
             b_val, c_val = base_res.precision_at_k, cand_res.precision_at_k
         elif "recall" in metric.lower():
             b_val, c_val = base_res.recall_at_k, cand_res.recall_at_k
-        elif "mrr" in metric.lower() or "reciprocal" in metric.lower():
+        elif is_mrr:
             b_val, c_val = base_res.reciprocal_rank, cand_res.reciprocal_rank
         else:
             b_val, c_val = base_res.ndcg_at_k, cand_res.ndcg_at_k
 
         delta = c_val - b_val
         if delta < -1e-6:  # Strict degradation
+            if is_mrr:
+                seen_mrr_queries.add((cand_res.query_id, cand_res.retriever_name))
+
             diagnostics.append(
                 QueryRegressionDiagnostic(
                     query_id=cand_res.query_id,

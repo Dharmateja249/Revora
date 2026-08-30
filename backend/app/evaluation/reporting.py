@@ -100,7 +100,7 @@ def generate_json_report(
 
     Args:
         reports: Mapping of retriever name -> RetrieverBenchmarkReport, or EvaluationReport instance.
-        regressions: Optional regression findings/report.
+        regressions: Optional regression findings/report (RegressionReport or Mapping[str, RegressionAnalysis]).
         indent: JSON indentation spaces (default: 2).
 
     Returns:
@@ -111,6 +111,17 @@ def generate_json_report(
         if regressions is not None:
             if isinstance(regressions, RegressionReport):
                 data["regression_report"] = regressions.model_dump(mode="json")
+            elif isinstance(regressions, dict):
+                serialized_analyses = {
+                    name: (
+                        regressions[name].model_dump(mode="json")
+                        if hasattr(regressions[name], "model_dump")
+                        else regressions[name]
+                    )
+                    for name in sorted(regressions.keys())
+                }
+                data["regression_analyses"] = serialized_analyses
+                data["regression_analysis"] = serialized_analyses
         return json.dumps(data, indent=indent, sort_keys=True)
 
     if not reports:
@@ -178,7 +189,7 @@ def generate_json_report(
                 ],
             }
 
-    root_payload = {
+    root_payload: Dict[str, Any] = {
         "benchmark": {
             "dataset_name": dataset_name,
             "query_count": num_queries,
@@ -187,6 +198,21 @@ def generate_json_report(
         },
         "retrievers": retrievers_payload,
     }
+
+    if regressions:
+        if isinstance(regressions, RegressionReport):
+            root_payload["regression_report"] = regressions.model_dump(mode="json")
+        elif isinstance(regressions, dict):
+            serialized_analyses = {
+                name: (
+                    regressions[name].model_dump(mode="json")
+                    if hasattr(regressions[name], "model_dump")
+                    else regressions[name]
+                )
+                for name in sorted(regressions.keys())
+            }
+            root_payload["regression_analyses"] = serialized_analyses
+            root_payload["regression_analysis"] = serialized_analyses
 
     return json.dumps(root_payload, indent=indent, sort_keys=True)
 
@@ -209,7 +235,7 @@ def generate_markdown_report(
         k_vals = list(reports.configured_k_values)
         d_name = dataset_name or reports.dataset_name
         n_queries = query_count if query_count is not None else reports.query_count
-        n_judgments = total_judgments if total_judgments is not None else 230
+        n_judgments = total_judgments if total_judgments is not None else reports.metadata.get("total_judgments")
 
         # Helper extractors for EvaluationReport
         def get_mrr(name: str) -> float:
@@ -234,7 +260,7 @@ def generate_markdown_report(
         k_vals = list(first_report.k_values)
         d_name = dataset_name or first_report.dataset_name
         n_queries = query_count if query_count is not None else first_report.num_queries
-        n_judgments = total_judgments if total_judgments is not None else 230
+        n_judgments = total_judgments if total_judgments is not None else first_report.metadata.get("total_judgments")
 
         def get_mrr(name: str) -> float:
             return reports[name].aggregate_metrics.get("mrr", 0.0)
@@ -261,10 +287,13 @@ def generate_markdown_report(
         "| :--- | :--- |",
         f"| **Dataset** | `{d_name}` |",
         f"| **Evaluation Queries** | `{n_queries}` |",
-        f"| **Ground-Truth Judgments** | `{n_judgments}` |",
+    ]
+    if n_judgments is not None:
+        overview_table.append(f"| **Ground-Truth Judgments** | `{n_judgments}` |")
+    overview_table.extend([
         f"| **Evaluated Retrievers** | `{len(retriever_names)}` ({', '.join(retriever_names)}) |",
         f"| **Benchmark Depths (K)** | `{', '.join(str(k) for k in k_vals)}` |",
-    ]
+    ])
     sections.append("\n".join(overview_table) + "\n")
 
     # Executive Summary
@@ -393,6 +422,7 @@ def save_benchmark_artifacts(
     reports: Union[Mapping[str, RetrieverBenchmarkReport], EvaluationReport],
     output_dir: Union[Path, str],
     regressions: Optional[Union[Mapping[str, RegressionAnalysis], RegressionReport]] = None,
+    total_judgments: Optional[int] = None,
 ) -> Dict[str, Path]:
     """
     Persist benchmark JSON and Markdown artifacts to the specified directory.
@@ -403,8 +433,20 @@ def save_benchmark_artifacts(
     json_path = target_path / "benchmark.json"
     md_path = target_path / "benchmark.md"
 
+    computed_judgments = total_judgments
+    if computed_judgments is None:
+        if isinstance(reports, EvaluationReport):
+            computed_judgments = reports.metadata.get("total_judgments")
+        elif reports:
+            first_report = next(iter(reports.values()))
+            computed_judgments = first_report.metadata.get("total_judgments")
+
     json_content = generate_json_report(reports, regressions=regressions)
-    md_content = generate_markdown_report(reports, regressions=regressions)
+    md_content = generate_markdown_report(
+        reports,
+        regressions=regressions,
+        total_judgments=computed_judgments,
+    )
 
     json_path.write_text(json_content, encoding="utf-8")
     md_path.write_text(md_content, encoding="utf-8")

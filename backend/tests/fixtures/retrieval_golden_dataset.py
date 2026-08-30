@@ -21,6 +21,7 @@ from app.context import (
     RecoveryOpportunityContext,
 )
 from app.evaluation.schemas import EvaluationCase, GroundTruthJudgment
+from app.historical_retrieval import HistoricalCase
 
 
 def _make_uuid(domain_idx: int, item_idx: int) -> UUID:
@@ -566,6 +567,7 @@ def _build_evaluation_cases() -> Tuple[EvaluationCase, ...]:
 
         # 2. Build Historical Payments & Ground Truth Judgments
         hist_payments: List[HistoricalPaymentContext] = []
+        foreign_cases: List[HistoricalCase] = []
         judgments: List[GroundTruthJudgment] = []
 
         for cand_idx, spec in enumerate(cand_specs, start=1):
@@ -601,6 +603,24 @@ def _build_evaluation_cases() -> Tuple[EvaluationCase, ...]:
                     recovery_attempts_count=1 if c_recovered else 2,
                 )
                 hist_payments.append(hist_p)
+            else:
+                # Materialize foreign-customer case preserving real foreign customer identity
+                foreign_case = HistoricalCase(
+                    payment_id=cand_payment_id,
+                    customer_id=cand_customer_id,
+                    external_payment_id=f"hist_pay_{scen_id:03d}_{cand_idx:02d}",
+                    external_customer_id=f"cust_ext_{c_cust_idx:03d}",
+                    amount=c_amount,
+                    currency=currency,
+                    payment_method=c_method,
+                    failure_reason=c_failure,
+                    recovery_action=c_action,
+                    recovery_status="recovered" if c_recovered else "failed",
+                    amount_recovered=c_amount if c_recovered else 0.0,
+                    was_recovered=c_recovered,
+                    created_at=c_created_at,
+                )
+                foreign_cases.append(foreign_case)
 
             # Ground Truth Judgment
             judgment = GroundTruthJudgment(
@@ -657,6 +677,7 @@ def _build_evaluation_cases() -> Tuple[EvaluationCase, ...]:
                 "failure_reason": failure,
                 "currency": currency,
                 "amount": amount,
+                "foreign_historical_cases": tuple(foreign_cases),
             },
         )
         cases.append(eval_case)

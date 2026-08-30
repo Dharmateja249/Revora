@@ -224,3 +224,19 @@ def test_save_benchmark_artifacts(tmp_path: Path):
     # Verify Markdown content is present
     md_text = md_file.read_text(encoding="utf-8")
     assert "Revora Retrieval Evaluation Report" in md_text
+
+
+def test_app_evaluation_isolated_import():
+    """Verify app.evaluation and all submodules can be imported cleanly without tests on PYTHONPATH."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    backend_dir = str(Path(__file__).resolve().parent.parent)
+    code = f"import sys; sys.path.insert(0, r'{backend_dir}'); sys.path = [p for p in sys.path if 'tests' not in p]; import app.evaluation; assert hasattr(app.evaluation, 'run_benchmark')"
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"Import failed: {result.stderr}"

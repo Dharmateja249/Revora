@@ -7,7 +7,7 @@ comparing benchmark runs, and asserting regression safety in CI.
 
 import argparse
 import sys
-from typing import Optional
+from typing import Any, Optional, Sequence
 
 from app.evaluation.benchmark import run_benchmark
 from app.evaluation.persistence import (
@@ -29,7 +29,10 @@ from app.evaluation.reporting import (
 )
 
 
-def run_cli(args: Optional[list[str]] = None) -> int:
+from app.evaluation.schemas import EvaluationRegressionError
+
+
+def run_cli(args: Optional[list[str]] = None, evaluation_cases: Optional[Sequence[Any]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Revora Retrieval Evaluation & Regression Detection CLI",
     )
@@ -42,11 +45,25 @@ def run_cli(args: Optional[list[str]] = None) -> int:
 
     parsed = parser.parse_args(args)
 
+    if parsed.assert_no_regressions and not parsed.compare_baseline:
+        print("Error: --assert-no-regressions requires --compare-baseline <baseline_id_or_path>.", file=sys.stderr)
+        return 1
+
     if not (parsed.run or parsed.compare_baseline or parsed.save or parsed.json or parsed.markdown):
         parsed.run = True
         parsed.markdown = True
 
-    reports = run_benchmark()
+    cases = evaluation_cases
+    if cases is None:
+        try:
+            # Lazy import for test fixture dataset when running CLI
+            from tests.fixtures.retrieval_golden_dataset import get_golden_evaluation_cases
+            cases = get_golden_evaluation_cases()
+        except ImportError:
+            print("Error: No evaluation_cases provided and golden dataset fixture could not be imported.", file=sys.stderr)
+            return 1
+
+    reports = run_benchmark(evaluation_cases=cases)
     eval_report = create_evaluation_report(reports)
 
     reg_report = None
@@ -54,7 +71,7 @@ def run_cli(args: Optional[list[str]] = None) -> int:
         try:
             baseline_report = load_report(parsed.compare_baseline)
             reg_report = compare_reports(baseline=baseline_report, candidate=eval_report)
-        except Exception as e:
+        except (FileNotFoundError, ValueError, OSError) as e:
             print(f"Error loading/comparing baseline: {e}", file=sys.stderr)
             return 1
 
@@ -69,10 +86,13 @@ def run_cli(args: Optional[list[str]] = None) -> int:
     elif parsed.markdown or (not parsed.json and not parsed.save):
         print(generate_markdown_report(eval_report, regressions=reg_report))
 
-    if parsed.assert_no_regressions and reg_report:
+    if parsed.assert_no_regressions:
+        if reg_report is None:
+            print("Error: No regression analysis available to assert against.", file=sys.stderr)
+            return 1
         try:
             assert_no_regressions(reg_report)
-        except Exception as e:
+        except EvaluationRegressionError as e:
             print(str(e), file=sys.stderr)
             return 1
 

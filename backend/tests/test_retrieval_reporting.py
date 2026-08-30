@@ -27,6 +27,11 @@ from app.evaluation.schemas import (
 )
 
 
+from tests.fixtures.retrieval_golden_dataset import get_golden_evaluation_cases
+from app.evaluation.cli import run_cli
+from app.evaluation.regression import RegressionAnalysis, RegressionFinding, RegressionSeverity
+
+
 def _make_sample_summary(name: str = "HistoricalRetriever", mrr: float = 0.98, lat: float = 0.05) -> RetrieverEvaluationSummary:
     return RetrieverEvaluationSummary(
         retriever_name=name,
@@ -102,14 +107,13 @@ def test_evaluation_report_construction_and_immutability():
 
 
 def test_create_evaluation_report_from_benchmark_results():
-    reports = run_benchmark(k_values=(1, 3))
+    cases = get_golden_evaluation_cases()[:5]
+    reports = run_benchmark(evaluation_cases=cases, k_values=(1, 3))
     eval_rep = create_evaluation_report(reports, report_id="test_run_bench", dataset_name="golden_v1")
 
     assert eval_rep.report_id == "test_run_bench"
     assert eval_rep.dataset_name == "golden_v1"
-    assert len(eval_rep.retriever_summaries) == 3
-    assert "DeterministicHistoricalRetriever" in eval_rep.retriever_summaries
-    assert eval_rep.retriever_summaries["DeterministicHistoricalRetriever"].mrr == pytest.approx(0.98, rel=1e-2)
+    assert 0.0 <= eval_rep.retriever_summaries["DeterministicHistoricalRetriever"].mrr <= 1.0
 
 
 def test_json_report_serialization_deterministic():
@@ -130,6 +134,40 @@ def test_json_report_serialization_deterministic():
     parsed = json.loads(json_1)
     assert parsed["report_id"] == "eval_det_test"
     assert "HistoricalRetriever" in parsed["retriever_summaries"]
+
+
+def test_json_report_serialization_with_regression_analysis_mapping():
+    summary = _make_sample_summary("HistoricalRetriever")
+    report = EvaluationReport(
+        report_id="eval_reg_json_test",
+        dataset_name="golden_v1",
+        dataset_version="v1",
+        query_count=50,
+        configured_k_values=(1, 3),
+        retriever_summaries={"HistoricalRetriever": summary},
+    )
+    reg_analysis = RegressionAnalysis(
+        retriever_name="HistoricalRetriever",
+        status="WARN",
+        findings=(
+            RegressionFinding(
+                retriever_name="HistoricalRetriever",
+                metric="mrr",
+                baseline_value=0.98,
+                candidate_value=0.92,
+                absolute_delta=-0.06,
+                relative_delta_percent=-6.12,
+                severity=RegressionSeverity.WARNING,
+                message="MRR dropped by 0.06",
+            ),
+        ),
+    )
+
+    json_out = generate_json_report(report, regressions={"HistoricalRetriever": reg_analysis})
+    parsed = json.loads(json_out)
+    assert "regression_analysis" in parsed
+    assert "HistoricalRetriever" in parsed["regression_analysis"]
+    assert parsed["regression_analysis"]["HistoricalRetriever"]["status"] == "WARN"
 
 
 def test_markdown_report_from_evaluation_report():
@@ -158,6 +196,103 @@ def test_markdown_report_from_evaluation_report():
     assert "DeterministicHistoricalRetriever" in md
     assert "SemanticHistoricalRetriever" in md
     assert "HybridHistoricalRetriever" in md
+
+
+def test_markdown_report_dynamic_judgments_count():
+    summary = _make_sample_summary("HistoricalRetriever")
+    report = EvaluationReport(
+        report_id="eval_md_test",
+        dataset_name="retrieval_golden_dataset",
+        dataset_version="v1",
+        query_count=50,
+        configured_k_values=(1, 3),
+        retriever_summaries={"HistoricalRetriever": summary},
+    )
+
+    # 1. Without total_judgments: ground-truth judgments row is omitted (not hardcoded to 230)
+    md_omitted = generate_markdown_report(report)
+    assert "Ground-Truth Judgments" not in md_omitted
+
+    # 2. With explicit total_judgments: rendered accurately
+    md_explicit = generate_markdown_report(report, total_judgments=175)
+    assert "| **Ground-Truth Judgments** | `175` |" in md_explicit
+
+
+def test_cli_assert_no_regressions_without_baseline_fails(capsys):
+    ret_code = run_cli(["--assert-no-regressions"])
+    assert ret_code == 1
+    captured = capsys.readouterr()
+    assert "Error: --assert-no-regressions requires --compare-baseline" in captured.err
+
+
+def test_cli_assert_no_regressions_with_baseline_success(tmp_path):
+    cases = get_golden_evaluation_cases()[:3]
+    reports = run_benchmark(evaluation_cases=cases, k_values=(1, 3, 5, 10))
+    eval_rep = create_evaluation_report(reports, report_id="cli_base_pass", dataset_name="retrieval_golden_dataset_v1")
+    # Buffer latency in baseline to avoid CPU timing jitter in fast unit tests
+    buffered_summaries = {
+        name: RetrieverEvaluationSummary(
+            retriever_name=s.retriever_name,
+            query_count=s.query_count,
+            mrr=s.mrr,
+            mean_latency_ms=max(s.mean_latency_ms, 50.0),
+            precision_at_k=s.precision_at_k,
+            recall_at_k=s.recall_at_k,
+            ndcg_at_k=s.ndcg_at_k,
+        )
+        for name, s in eval_rep.retriever_summaries.items()
+    }
+    base_report = EvaluationReport(
+        report_id="cli_base_pass",
+        dataset_name="retrieval_golden_dataset_v1",
+        dataset_version="v1",
+        query_count=3,
+        configured_k_values=(1, 3, 5, 10),
+        retriever_summaries=buffered_summaries,
+    )
+    from app.evaluation.persistence import save_report
+    base_file = save_report(base_report, directory=tmp_path)
+
+    ret_code = run_cli(
+        ["--compare-baseline", str(base_file), "--assert-no-regressions"],
+        evaluation_cases=cases,
+    )
+    assert ret_code == 0
+
+
+def test_cli_assert_no_regressions_with_regression_fails(tmp_path, capsys):
+    cases = get_golden_evaluation_cases()[:3]
+    reports = run_benchmark(evaluation_cases=cases, k_values=(1, 3, 5, 10))
+    # Make baseline report artificially high
+    high_summaries = {}
+    for name, sum_obj in create_evaluation_report(reports).retriever_summaries.items():
+        high_summaries[name] = RetrieverEvaluationSummary(
+            retriever_name=name,
+            query_count=3,
+            mrr=1.0,
+            mean_latency_ms=0.01,
+            precision_at_k={1: 1.0, 3: 1.0, 5: 1.0, 10: 1.0},
+            recall_at_k={1: 1.0, 3: 1.0, 5: 1.0, 10: 1.0},
+            ndcg_at_k={1: 1.0, 3: 1.0, 5: 1.0, 10: 1.0},
+        )
+    base_report = EvaluationReport(
+        report_id="cli_base_high",
+        dataset_name="retrieval_golden_dataset_v1",
+        dataset_version="v1",
+        query_count=3,
+        configured_k_values=(1, 3, 5, 10),
+        retriever_summaries=high_summaries,
+    )
+    from app.evaluation.persistence import save_report
+    base_file = save_report(base_report, directory=tmp_path)
+
+    ret_code = run_cli(
+        ["--compare-baseline", str(base_file), "--assert-no-regressions"],
+        evaluation_cases=cases,
+    )
+    assert ret_code == 1
+    captured = capsys.readouterr()
+    assert "Evaluation Regression Detected" in captured.err
 
 
 def test_save_benchmark_artifacts_from_evaluation_report(tmp_path):

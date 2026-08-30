@@ -176,6 +176,45 @@ def test_find_worst_query_regressions():
     assert worst[1].delta == pytest.approx(-0.2)
 
 
+def test_find_worst_query_regressions_mrr_no_duplicates():
+    """Verify that MRR regression diagnostics produce exactly one entry per degraded query despite multiple K rows."""
+    qid = uuid4()
+    # Baseline results for K=1, 3, 5
+    base_results = [
+        RetrievalEvalResult(
+            query_id=qid,
+            retriever_name="RetrieverA",
+            k=k,
+            retrieved_payment_ids=(uuid4(),),
+            precision_at_k=1.0,
+            recall_at_k=1.0,
+            reciprocal_rank=1.0,
+            ndcg_at_k=1.0,
+        )
+        for k in (1, 3, 5)
+    ]
+    # Candidate results for K=1, 3, 5 with degraded MRR (1.0 -> 0.33)
+    cand_results = [
+        RetrievalEvalResult(
+            query_id=qid,
+            retriever_name="RetrieverA",
+            k=k,
+            retrieved_payment_ids=(uuid4(),),
+            precision_at_k=0.33,
+            recall_at_k=0.33,
+            reciprocal_rank=0.33,
+            ndcg_at_k=0.33,
+        )
+        for k in (1, 3, 5)
+    ]
+
+    worst_mrr = find_worst_query_regressions(base_results, cand_results, metric="mrr", limit=10)
+    assert len(worst_mrr) == 1, f"Expected exactly 1 diagnostic for query MRR regression, got {len(worst_mrr)}"
+    assert worst_mrr[0].query_id == qid
+    assert worst_mrr[0].metric_name == "mrr"
+    assert worst_mrr[0].delta == pytest.approx(-0.67, rel=1e-2)
+
+
 def test_regression_report_immutability():
     check = RegressionCheck(
         metric_name="mrr",
