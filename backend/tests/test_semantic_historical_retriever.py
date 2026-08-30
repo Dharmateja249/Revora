@@ -320,7 +320,7 @@ def test_missing_or_malformed_customer_id_fails_closed():
 
 
 def test_timestamp_comparisons_and_timezone_safety():
-    """Verify naive vs aware datetimes, valid historical, malformed, and future timestamps."""
+    """Verify naive vs aware datetimes, valid historical, malformed, future, and Z-suffixed timestamps."""
     customer_id = uuid.uuid4()
     embedding_service = get_embedding_service()
     vector_index = VectorIndex(dimension=embedding_service.dimension)
@@ -339,22 +339,56 @@ def test_timestamp_comparisons_and_timezone_safety():
         text="failure_reason: timeout\npayment_method: card\namount: 100.00\ncurrency: INR\nrecovery_action: retry\nrecovery_status: recovered\nwas_recovered: true\namount_recovered: 100.00",
         metadata={"customer_id": str(customer_id), "created_at": "2026-01-20T10:00:00+00:00", "was_recovered": True},
     )
-    # Historical Case 3: Future timestamp (should be excluded)
+    # Historical Case 3: Valid ISO string with 'Z' suffix in past (should succeed)
+    doc_past_z = RetrievalDocument(
+        case_id=uuid.uuid4(),
+        text="failure_reason: timeout\npayment_method: card\namount: 100.00\ncurrency: INR\nrecovery_action: retry\nrecovery_status: recovered\nwas_recovered: true\namount_recovered: 100.00",
+        metadata={"customer_id": str(customer_id), "created_at": "2026-01-25T10:00:00Z", "was_recovered": True},
+    )
+    # Historical Case 4: Timestamp equal to current payment (should succeed)
+    doc_equal_curr = RetrievalDocument(
+        case_id=uuid.uuid4(),
+        text="failure_reason: timeout\npayment_method: card\namount: 100.00\ncurrency: INR\nrecovery_action: retry\nrecovery_status: recovered\nwas_recovered: true\namount_recovered: 100.00",
+        metadata={"customer_id": str(customer_id), "created_at": "2026-02-01T12:00:00Z", "was_recovered": True},
+    )
+    # Historical Case 5: Future timestamp (should be excluded)
     doc_future = RetrievalDocument(
         case_id=uuid.uuid4(),
         text="failure_reason: timeout\npayment_method: card\namount: 100.00\ncurrency: INR\nrecovery_action: retry\nrecovery_status: recovered\nwas_recovered: true\namount_recovered: 100.00",
         metadata={"customer_id": str(customer_id), "created_at": "2026-03-01T10:00:00+00:00", "was_recovered": True},
     )
-    # Historical Case 4: Malformed timestamp (fail closed: should be excluded)
+    # Historical Case 6: Future timestamp with 'Z' suffix (should be excluded)
+    doc_future_z = RetrievalDocument(
+        case_id=uuid.uuid4(),
+        text="failure_reason: timeout\npayment_method: card\namount: 100.00\ncurrency: INR\nrecovery_action: retry\nrecovery_status: recovered\nwas_recovered: true\namount_recovered: 100.00",
+        metadata={"customer_id": str(customer_id), "created_at": "2026-03-05T10:00:00Z", "was_recovered": True},
+    )
+    # Historical Case 7: Malformed timestamp (fail closed: should be excluded)
     doc_malformed_time = RetrievalDocument(
         case_id=uuid.uuid4(),
         text="failure_reason: timeout\npayment_method: card\namount: 100.00\ncurrency: INR\nrecovery_action: retry\nrecovery_status: recovered\nwas_recovered: true\namount_recovered: 100.00",
         metadata={"customer_id": str(customer_id), "created_at": "not-a-datetime", "was_recovered": True},
     )
+    # Historical Case 8: Missing created_at (fail closed: should be excluded when current payment has timestamp)
+    doc_missing_time = RetrievalDocument(
+        case_id=uuid.uuid4(),
+        text="failure_reason: timeout\npayment_method: card\namount: 100.00\ncurrency: INR\nrecovery_action: retry\nrecovery_status: recovered\nwas_recovered: true\namount_recovered: 100.00",
+        metadata={"customer_id": str(customer_id), "was_recovered": True},
+    )
 
+    all_docs = [
+        doc_past_naive,
+        doc_past_aware,
+        doc_past_z,
+        doc_equal_curr,
+        doc_future,
+        doc_future_z,
+        doc_malformed_time,
+        doc_missing_time,
+    ]
     vector_index.add_batch(
-        [doc_past_naive, doc_past_aware, doc_future, doc_malformed_time],
-        embedding_service.embed_batch([d.text for d in [doc_past_naive, doc_past_aware, doc_future, doc_malformed_time]]),
+        all_docs,
+        embedding_service.embed_batch([d.text for d in all_docs]),
     )
 
     context = CustomerRecoveryContext(
@@ -373,13 +407,52 @@ def test_timestamp_comparisons_and_timezone_safety():
         vector_index=vector_index,
         embedding_service=embedding_service,
     )
-    results = retriever.retrieve(context, top_k=10)
+    results = retriever.retrieve(context, top_k=15)
 
-    # Only past naive and past aware should be returned (future and malformed excluded)
+    # Only past naive, past aware, past Z, and equal current should be returned
     retrieved_ids = {r.payment_id for r in results}
-    assert retrieved_ids == {doc_past_naive.case_id, doc_past_aware.case_id}
+    assert retrieved_ids == {
+        doc_past_naive.case_id,
+        doc_past_aware.case_id,
+        doc_past_z.case_id,
+        doc_equal_curr.case_id,
+    }
     assert doc_future.case_id not in retrieved_ids
+    assert doc_future_z.case_id not in retrieved_ids
     assert doc_malformed_time.case_id not in retrieved_ids
+    assert doc_missing_time.case_id not in retrieved_ids
+
+
+def test_normalize_datetime_helper():
+    """Verify _normalize_datetime supports diverse ISO formats, Z suffix, datetime objects, and error cases."""
+    from app.semantic_historical_retriever import _normalize_datetime
+
+    # Z suffix
+    dt_z = _normalize_datetime("2026-01-01T10:00:00Z")
+    assert dt_z == datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+
+    # Lowercase z
+    dt_lower_z = _normalize_datetime("2026-01-01T10:00:00z")
+    assert dt_lower_z == datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+
+    # Offset string
+    dt_offset = _normalize_datetime("2026-01-01T15:30:00+05:30")
+    assert dt_offset == datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+
+    # Naive datetime object -> UTC aware
+    dt_naive = datetime(2026, 1, 1, 10, 0, 0)
+    assert _normalize_datetime(dt_naive) == datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+
+    # Aware datetime object -> UTC converted
+    assert _normalize_datetime(dt_z) == datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+
+    # Invalid / empty / unsupported types return None without raising
+    assert _normalize_datetime(None) is None
+    assert _normalize_datetime("") is None
+    assert _normalize_datetime("   ") is None
+    assert _normalize_datetime("not-a-valid-date") is None
+    assert _normalize_datetime(123456) is None
+    assert _normalize_datetime([]) is None
 
 
 # ============================================================================

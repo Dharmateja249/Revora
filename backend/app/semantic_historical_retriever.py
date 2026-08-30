@@ -24,8 +24,11 @@ def _normalize_datetime(dt: Any) -> Optional[datetime]:
             return dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(timezone.utc)
     if isinstance(dt, str) and dt.strip():
+        raw_str = dt.strip()
+        if raw_str.endswith("Z") or raw_str.endswith("z"):
+            raw_str = raw_str[:-1] + "+00:00"
         try:
-            parsed = datetime.fromisoformat(dt.strip())
+            parsed = datetime.fromisoformat(raw_str)
             if parsed.tzinfo is None:
                 return parsed.replace(tzinfo=timezone.utc)
             return parsed.astimezone(timezone.utc)
@@ -108,12 +111,8 @@ def _search_result_to_historical_case(result: VectorSearchResult) -> HistoricalC
         raise ValueError(f"Missing or invalid customer_id in document metadata: {raw_cust_id!r}")
 
     # Parse timestamps if present in metadata
-    created_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    if "created_at" in meta and meta["created_at"]:
-        created_at = _normalize_datetime(meta["created_at"])
-    if "completed_at" in meta and meta["completed_at"]:
-        completed_at = _normalize_datetime(meta["completed_at"])
+    created_at: Optional[datetime] = _normalize_datetime(meta.get("created_at"))
+    completed_at: Optional[datetime] = _normalize_datetime(meta.get("completed_at"))
 
     # Relevance score bounded strictly to [0.0, 1.0]
     bounded_relevance = round(max(0.0, min(1.0, result.similarity_score)), 4)
@@ -236,8 +235,8 @@ class SemanticHistoricalRetriever:
                 continue
 
             # Rule C: Temporal Isolation (Historical cases must precede or equal current payment; fail closed)
-            if current_created_at is not None and "created_at" in meta and meta["created_at"]:
-                doc_created_at = _normalize_datetime(meta["created_at"])
+            if current_created_at is not None:
+                doc_created_at = _normalize_datetime(meta.get("created_at"))
                 norm_current_created_at = _normalize_datetime(current_created_at)
                 if doc_created_at is None or norm_current_created_at is None:
                     continue

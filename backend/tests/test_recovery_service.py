@@ -132,6 +132,7 @@ def test_recovery_service_happy_path(in_memory_db):
         recovery_status="recovered",
         amount_recovered=2500.0,
         was_recovered=True,
+        created_at=utc_now() - timedelta(days=2),
     )
     doc = historical_case_to_document(hist_case)
     vector_index.add(doc, emb_service.embed(doc.text))

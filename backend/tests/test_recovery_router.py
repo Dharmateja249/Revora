@@ -458,6 +458,7 @@ def test_shared_vector_index_persistence_across_requests(client, test_db_session
             "amount": 3000.0,
             "was_recovered": True,
             "recovery_action": "payment_link",
+            "created_at": (utc_now() - timedelta(days=2)).isoformat(),
         },
     )
     shared_index.add(hist_doc, embedding_service.embed(hist_doc.text))
