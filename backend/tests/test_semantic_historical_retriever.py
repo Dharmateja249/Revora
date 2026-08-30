@@ -264,36 +264,44 @@ def test_cross_customer_tenant_isolation():
     assert len(results) == 0
 
 
-def test_future_cases_excluded_by_temporal_boundary():
-    """Verify historical cases with created_at timestamp after current payment are excluded."""
-    customer_id = uuid.uuid4()
+def test_missing_or_malformed_customer_id_fails_closed():
+    """Verify documents with missing or malformed customer_id are excluded and never fall back to payment_id."""
+    valid_cid = uuid.uuid4()
     embedding_service = get_embedding_service()
     vector_index = VectorIndex(dimension=embedding_service.dimension)
 
-    t_curr = datetime(2026, 2, 1, 12, 0, 0, tzinfo=timezone.utc)
-
-    # Historical Case created in the future relative to current payment
-    future_case = HistoricalCase(
-        payment_id=uuid.uuid4(),
-        customer_id=customer_id,
-        amount=1000.0,
-        payment_method="card",
-        failure_reason="timeout",
-        recovery_status="recovered",
-        created_at=t_curr + timedelta(days=10),
+    # Document 1: Missing customer_id
+    doc_missing_cust = RetrievalDocument(
+        case_id=uuid.uuid4(),
+        text="failure_reason: insufficient_funds\npayment_method: card\namount: 1000.00\ncurrency: INR\nrecovery_action: none\nrecovery_status: failed\nwas_recovered: false\namount_recovered: 0.00",
+        metadata={"amount": 1000.0, "failure_reason": "insufficient_funds"},
     )
-    doc_future = historical_case_to_document(future_case)
-    vector_index.add(doc_future, embedding_service.embed(doc_future.text))
+    vector_index.add(doc_missing_cust, embedding_service.embed(doc_missing_cust.text))
+
+    # Document 2: Malformed customer_id
+    doc_malformed_cust = RetrievalDocument(
+        case_id=uuid.uuid4(),
+        text="failure_reason: insufficient_funds\npayment_method: card\namount: 1000.00\ncurrency: INR\nrecovery_action: none\nrecovery_status: failed\nwas_recovered: false\namount_recovered: 0.00",
+        metadata={"customer_id": "not-a-valid-uuid", "amount": 1000.0},
+    )
+    vector_index.add(doc_malformed_cust, embedding_service.embed(doc_malformed_cust.text))
+
+    # Document 3: Valid matching customer_id
+    doc_valid = RetrievalDocument(
+        case_id=uuid.uuid4(),
+        text="failure_reason: insufficient_funds\npayment_method: card\namount: 1000.00\ncurrency: INR\nrecovery_action: none\nrecovery_status: recovered\nwas_recovered: true\namount_recovered: 1000.00",
+        metadata={"customer_id": str(valid_cid), "amount": 1000.0, "was_recovered": True},
+    )
+    vector_index.add(doc_valid, embedding_service.embed(doc_valid.text))
 
     context = CustomerRecoveryContext(
-        customer=CustomerContext(customer_id=customer_id),
+        customer=CustomerContext(customer_id=valid_cid),
         current_payment=PaymentContext(
             payment_id=uuid.uuid4(),
             amount=1000.0,
             payment_method="card",
             status="failed",
-            failure_reason="timeout",
-            created_at=t_curr,
+            failure_reason="insufficient_funds",
         ),
     )
 
@@ -301,9 +309,77 @@ def test_future_cases_excluded_by_temporal_boundary():
         vector_index=vector_index,
         embedding_service=embedding_service,
     )
-    results = retriever.retrieve(context)
+    results = retriever.retrieve(context, top_k=5)
 
-    assert len(results) == 0
+    # Only doc_valid must be returned; missing/malformed must be skipped
+    assert len(results) == 1
+    assert results[0].payment_id == doc_valid.case_id
+    assert results[0].customer_id == valid_cid
+    # Verify customer_id was NOT defaulted to case_id
+    assert results[0].customer_id != results[0].payment_id
+
+
+def test_timestamp_comparisons_and_timezone_safety():
+    """Verify naive vs aware datetimes, valid historical, malformed, and future timestamps."""
+    customer_id = uuid.uuid4()
+    embedding_service = get_embedding_service()
+    vector_index = VectorIndex(dimension=embedding_service.dimension)
+
+    t_curr_aware = datetime(2026, 2, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    # Historical Case 1: Naive timestamp in past relative to current payment (should succeed)
+    doc_past_naive = RetrievalDocument(
+        case_id=uuid.uuid4(),
+        text="failure_reason: timeout\npayment_method: card\namount: 100.00\ncurrency: INR\nrecovery_action: retry\nrecovery_status: recovered\nwas_recovered: true\namount_recovered: 100.00",
+        metadata={"customer_id": str(customer_id), "created_at": "2026-01-15T10:00:00", "was_recovered": True},
+    )
+    # Historical Case 2: Aware timestamp in past (should succeed)
+    doc_past_aware = RetrievalDocument(
+        case_id=uuid.uuid4(),
+        text="failure_reason: timeout\npayment_method: card\namount: 100.00\ncurrency: INR\nrecovery_action: retry\nrecovery_status: recovered\nwas_recovered: true\namount_recovered: 100.00",
+        metadata={"customer_id": str(customer_id), "created_at": "2026-01-20T10:00:00+00:00", "was_recovered": True},
+    )
+    # Historical Case 3: Future timestamp (should be excluded)
+    doc_future = RetrievalDocument(
+        case_id=uuid.uuid4(),
+        text="failure_reason: timeout\npayment_method: card\namount: 100.00\ncurrency: INR\nrecovery_action: retry\nrecovery_status: recovered\nwas_recovered: true\namount_recovered: 100.00",
+        metadata={"customer_id": str(customer_id), "created_at": "2026-03-01T10:00:00+00:00", "was_recovered": True},
+    )
+    # Historical Case 4: Malformed timestamp (fail closed: should be excluded)
+    doc_malformed_time = RetrievalDocument(
+        case_id=uuid.uuid4(),
+        text="failure_reason: timeout\npayment_method: card\namount: 100.00\ncurrency: INR\nrecovery_action: retry\nrecovery_status: recovered\nwas_recovered: true\namount_recovered: 100.00",
+        metadata={"customer_id": str(customer_id), "created_at": "not-a-datetime", "was_recovered": True},
+    )
+
+    vector_index.add_batch(
+        [doc_past_naive, doc_past_aware, doc_future, doc_malformed_time],
+        embedding_service.embed_batch([d.text for d in [doc_past_naive, doc_past_aware, doc_future, doc_malformed_time]]),
+    )
+
+    context = CustomerRecoveryContext(
+        customer=CustomerContext(customer_id=customer_id),
+        current_payment=PaymentContext(
+            payment_id=uuid.uuid4(),
+            amount=100.0,
+            payment_method="card",
+            status="failed",
+            failure_reason="timeout",
+            created_at=t_curr_aware,
+        ),
+    )
+
+    retriever = SemanticHistoricalRetriever(
+        vector_index=vector_index,
+        embedding_service=embedding_service,
+    )
+    results = retriever.retrieve(context, top_k=10)
+
+    # Only past naive and past aware should be returned (future and malformed excluded)
+    retrieved_ids = {r.payment_id for r in results}
+    assert retrieved_ids == {doc_past_naive.case_id, doc_past_aware.case_id}
+    assert doc_future.case_id not in retrieved_ids
+    assert doc_malformed_time.case_id not in retrieved_ids
 
 
 # ============================================================================

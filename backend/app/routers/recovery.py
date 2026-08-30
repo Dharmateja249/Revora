@@ -5,9 +5,12 @@ Provides HTTP endpoint for evaluating failed payment recovery decisions.
 Handles HTTP request parsing, dependency injection, and domain exception translation.
 """
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.auth import AuthenticatedPrincipal, get_current_principal
 from app.context import (
     CustomerNotFoundError,
     PaymentCustomerMismatchError,
@@ -15,18 +18,34 @@ from app.context import (
     RecoveryOpportunityNotFoundError,
 )
 from app.database import get_db
+from app.embedding_service import EmbeddingService, get_embedding_service
 from app.recovery_service import RecoveryService
 from app.schemas.recovery import (
     RecoveryEvaluationRequest,
     RecoveryEvaluationResponse,
 )
+from app.vector_index import VectorIndex, get_vector_index
 
 router = APIRouter()
 
 
-def get_recovery_service() -> RecoveryService:
-    """Dependency provider for RecoveryService instance."""
-    return RecoveryService()
+def get_recovery_service(
+    vector_index: Optional[VectorIndex] = Depends(get_vector_index),
+    embedding_service: Optional[EmbeddingService] = Depends(get_embedding_service),
+) -> RecoveryService:
+    """Dependency provider for RecoveryService instance with application-scoped vector index."""
+    resolved_index = (
+        vector_index if isinstance(vector_index, VectorIndex) else get_vector_index()
+    )
+    resolved_embedding = (
+        embedding_service
+        if isinstance(embedding_service, EmbeddingService)
+        else get_embedding_service()
+    )
+    return RecoveryService(
+        vector_index=resolved_index,
+        embedding_service=resolved_embedding,
+    )
 
 
 @router.post(
@@ -43,11 +62,19 @@ def get_recovery_service() -> RecoveryService:
 def evaluate_decision(
     request: RecoveryEvaluationRequest,
     db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     recovery_service: RecoveryService = Depends(get_recovery_service),
 ) -> RecoveryEvaluationResponse:
     """
     Evaluate a recovery decision for a specific failed payment and customer.
+    Requires caller authentication and strict tenant authorization prior to evaluation.
     """
+    if principal.customer_id != request.customer_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cross-tenant access forbidden: authenticated customer cannot evaluate recovery for another customer.",
+        )
+
     try:
         return recovery_service.evaluate_recovery(db_session=db, request=request)
     except CustomerNotFoundError as exc:

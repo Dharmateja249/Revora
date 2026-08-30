@@ -3,16 +3,22 @@ API Boundary Tests for FastAPI Recovery Evaluation Router (/v1/recovery/evaluate
 
 Tests:
 1. Happy path: POST /v1/recovery/evaluate-decision returns 200 with complete RecoveryEvaluationResponse
-2. Request validation: missing customer_id, missing payment_id, malformed UUID, extra fields (422)
-3. Domain exception mappings:
+2. Security & Tenant Authorization:
+   - Unauthenticated requests return 401 Unauthorized
+   - Invalid token format returns 401 Unauthorized
+   - Cross-customer requests return 403 Forbidden
+   - Authorization failures cause zero DB mutations
+3. Request validation: missing customer_id, missing payment_id, malformed UUID, extra fields (422)
+4. Domain exception mappings:
    - CustomerNotFoundError -> HTTP 404
    - PaymentNotFoundError -> HTTP 404
    - RecoveryOpportunityNotFoundError -> HTTP 404
    - PaymentCustomerMismatchError -> HTTP 403
-4. RAG disabled (use_rag=False): returns 200 with historical_rag_used=False
-5. Service isolation: dependency override of get_recovery_service for isolated HTTP boundary testing
-6. Health endpoint regression: GET /health returns 200
-7. OpenAPI schema regression: /openapi.json contains POST /v1/recovery/evaluate-decision
+5. RAG disabled (use_rag=False): returns 200 with historical_rag_used=False
+6. Service isolation: dependency override of get_recovery_service for isolated HTTP boundary testing
+7. Shared VectorIndex: persistence across requests and service resolutions
+8. Health endpoint regression: GET /health returns 200
+9. OpenAPI schema regression: /openapi.json contains POST /v1/recovery/evaluate-decision
 """
 
 from datetime import datetime, timezone, timedelta
@@ -20,10 +26,11 @@ import uuid
 from fastapi import status
 from fastapi.testclient import TestClient
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import sessionmaker
 
+from app.auth import AuthenticatedPrincipal, get_current_principal
 from app.context import (
     CustomerNotFoundError,
     PaymentCustomerMismatchError,
@@ -32,14 +39,17 @@ from app.context import (
 )
 from app.database import Base, get_db
 from app.decision_engine import RecoveryAction
+from app.embedding_service import get_embedding_service
 from app.main import app
-from app.models import Customer, Payment, RecoveryOpportunity, utc_now
+from app.models import AuditEvent, Customer, Payment, RecoveryOpportunity, utc_now
 from app.recovery_service import RecoveryService
+from app.retrieval_document import RetrievalDocument
 from app.routers.recovery import get_recovery_service
 from app.schemas.recovery import (
     RecoveryEvaluationRequest,
     RecoveryEvaluationResponse,
 )
+from app.vector_index import VectorIndex, get_vector_index
 
 
 # ============================================================================
@@ -128,7 +138,7 @@ def _seed_customer_payment_opportunity(
 
 
 def test_evaluate_decision_endpoint_happy_path(client, test_db_session):
-    """Verify POST /v1/recovery/evaluate-decision returns 200 with complete response."""
+    """Verify POST /v1/recovery/evaluate-decision returns 200 with complete response for authenticated user."""
     customer, payment, opportunity = _seed_customer_payment_opportunity(test_db_session)
 
     payload = {
@@ -136,8 +146,9 @@ def test_evaluate_decision_endpoint_happy_path(client, test_db_session):
         "payment_id": str(payment.id),
         "use_rag": True,
     }
+    headers = {"Authorization": f"Bearer {customer.id}"}
 
-    response = client.post("/v1/recovery/evaluate-decision", json=payload)
+    response = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
 
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
@@ -167,8 +178,9 @@ def test_evaluate_decision_endpoint_rag_disabled(client, test_db_session):
         "payment_id": str(payment.id),
         "use_rag": False,
     }
+    headers = {"Authorization": f"Bearer {customer.id}"}
 
-    response = client.post("/v1/recovery/evaluate-decision", json=payload)
+    response = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
 
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
@@ -177,48 +189,140 @@ def test_evaluate_decision_endpoint_rag_disabled(client, test_db_session):
 
 
 # ============================================================================
-# 2. Request Validation Tests (HTTP 422)
+# 2. Security & Tenant Authorization Tests
+# ============================================================================
+
+
+def test_unauthenticated_request_rejected_401(client, test_db_session):
+    """Verify unauthenticated request without token returns 401 Unauthorized."""
+    customer, payment, _ = _seed_customer_payment_opportunity(test_db_session)
+    payload = {
+        "customer_id": str(customer.id),
+        "payment_id": str(payment.id),
+    }
+
+    # No Authorization header
+    resp = client.post("/v1/recovery/evaluate-decision", json=payload)
+    assert resp.status_code == status.HTTP_401_UNAUTHORIZED
+    assert "credentials were not provided" in resp.json()["detail"]
+
+
+def test_invalid_token_format_rejected_401(client, test_db_session):
+    """Verify malformed bearer token returns 401 Unauthorized."""
+    customer, payment, _ = _seed_customer_payment_opportunity(test_db_session)
+    payload = {
+        "customer_id": str(customer.id),
+        "payment_id": str(payment.id),
+    }
+    headers = {"Authorization": "Bearer not-a-uuid-token"}
+
+    resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
+    assert resp.status_code == status.HTTP_401_UNAUTHORIZED
+    assert "Invalid authentication token" in resp.json()["detail"]
+
+
+def test_cross_customer_request_rejected_403(client, test_db_session):
+    """Verify authenticated customer requesting another customer's ID returns 403 Forbidden."""
+    cust_a, pay_a, _ = _seed_customer_payment_opportunity(test_db_session)
+    cust_b, pay_b, _ = _seed_customer_payment_opportunity(test_db_session)
+
+    # Caller authenticated as Customer A, but requests evaluation for Customer B
+    payload = {
+        "customer_id": str(cust_b.id),
+        "payment_id": str(pay_b.id),
+    }
+    headers = {"Authorization": f"Bearer {cust_a.id}"}
+
+    resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
+    assert resp.status_code == status.HTTP_403_FORBIDDEN
+    assert "Cross-tenant access forbidden" in resp.json()["detail"]
+
+
+def test_authorization_failure_causes_zero_database_mutation(client, test_db_session):
+    """Verify that unauthorized requests perform zero database mutations or audit event creation."""
+    cust_a, pay_a, _ = _seed_customer_payment_opportunity(test_db_session)
+    cust_b, pay_b, opp_b = _seed_customer_payment_opportunity(test_db_session)
+
+    initial_action = opp_b.recommended_action
+    initial_audits_count = test_db_session.query(AuditEvent).count()
+
+    # Unauthorized cross-tenant call
+    payload = {
+        "customer_id": str(cust_b.id),
+        "payment_id": str(pay_b.id),
+    }
+    headers = {"Authorization": f"Bearer {cust_a.id}"}
+
+    resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
+    assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+    # Verify opportunity is completely untouched
+    test_db_session.refresh(opp_b)
+    assert opp_b.recommended_action == initial_action
+
+    # Verify no audit event was created
+    final_audits_count = test_db_session.query(AuditEvent).count()
+    assert final_audits_count == initial_audits_count
+
+
+# ============================================================================
+# 3. Request Validation Tests (HTTP 422)
 # ============================================================================
 
 
 def test_request_validation_missing_fields(client):
     """Verify missing required identifiers return 422 Unprocessable Entity."""
+    cust_id = uuid.uuid4()
+    headers = {"Authorization": f"Bearer {cust_id}"}
+
     # Missing payment_id
-    resp = client.post("/v1/recovery/evaluate-decision", json={"customer_id": str(uuid.uuid4())})
+    resp = client.post(
+        "/v1/recovery/evaluate-decision",
+        json={"customer_id": str(cust_id)},
+        headers=headers,
+    )
     assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
     # Missing customer_id
-    resp = client.post("/v1/recovery/evaluate-decision", json={"payment_id": str(uuid.uuid4())})
+    resp = client.post(
+        "/v1/recovery/evaluate-decision",
+        json={"payment_id": str(uuid.uuid4())},
+        headers=headers,
+    )
     assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
     # Empty payload
-    resp = client.post("/v1/recovery/evaluate-decision", json={})
+    resp = client.post("/v1/recovery/evaluate-decision", json={}, headers=headers)
     assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
 
 def test_request_validation_malformed_uuid(client):
     """Verify malformed UUID string returns 422."""
+    cust_id = uuid.uuid4()
+    headers = {"Authorization": f"Bearer {cust_id}"}
     payload = {
         "customer_id": "not-a-uuid",
         "payment_id": str(uuid.uuid4()),
     }
-    resp = client.post("/v1/recovery/evaluate-decision", json=payload)
+    resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
     assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
 
 def test_request_validation_extra_fields(client):
     """Verify unexpected/extra fields in payload return 422."""
+    cust_id = uuid.uuid4()
+    headers = {"Authorization": f"Bearer {cust_id}"}
     payload = {
-        "customer_id": str(uuid.uuid4()),
+        "customer_id": str(cust_id),
         "payment_id": str(uuid.uuid4()),
         "unexpected_extra_key": "forbidden",
     }
-    resp = client.post("/v1/recovery/evaluate-decision", json=payload)
+    resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
     assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
 
 # ============================================================================
-# 3. Domain Exception HTTP Mappings
+# 4. Domain Exception HTTP Mappings
 # ============================================================================
 
 
@@ -229,7 +333,8 @@ def test_customer_not_found_returns_404(client, test_db_session):
         "customer_id": non_existent_cust_id,
         "payment_id": str(uuid.uuid4()),
     }
-    resp = client.post("/v1/recovery/evaluate-decision", json=payload)
+    headers = {"Authorization": f"Bearer {non_existent_cust_id}"}
+    resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
     assert resp.status_code == status.HTTP_404_NOT_FOUND
     assert non_existent_cust_id in resp.json()["detail"]
 
@@ -243,7 +348,8 @@ def test_payment_not_found_returns_404(client, test_db_session):
         "customer_id": str(customer.id),
         "payment_id": non_existent_pay_id,
     }
-    resp = client.post("/v1/recovery/evaluate-decision", json=payload)
+    headers = {"Authorization": f"Bearer {customer.id}"}
+    resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
     assert resp.status_code == status.HTTP_404_NOT_FOUND
     assert non_existent_pay_id in resp.json()["detail"]
 
@@ -253,11 +359,13 @@ def test_payment_customer_mismatch_returns_403(client, test_db_session):
     customer1, payment1, _ = _seed_customer_payment_opportunity(test_db_session)
     customer2, _, _ = _seed_customer_payment_opportunity(test_db_session)
 
+    # Customer 2 authorized to request customer2, but payment1 belongs to customer1
     payload = {
         "customer_id": str(customer2.id),
         "payment_id": str(payment1.id),
     }
-    resp = client.post("/v1/recovery/evaluate-decision", json=payload)
+    headers = {"Authorization": f"Bearer {customer2.id}"}
+    resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
     assert resp.status_code == status.HTTP_403_FORBIDDEN
     assert "belongs to customer" in resp.json()["detail"]
 
@@ -272,13 +380,14 @@ def test_opportunity_not_found_returns_404(client, test_db_session):
         "customer_id": str(customer.id),
         "payment_id": str(payment.id),
     }
-    resp = client.post("/v1/recovery/evaluate-decision", json=payload)
+    headers = {"Authorization": f"Bearer {customer.id}"}
+    resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
     assert resp.status_code == status.HTTP_404_NOT_FOUND
     assert "Recovery opportunity" in resp.json()["detail"]
 
 
 # ============================================================================
-# 4. Service Isolation via Dependency Override
+# 5. Service Isolation via Dependency Override
 # ============================================================================
 
 
@@ -315,7 +424,8 @@ def test_service_isolation_with_dependency_override(client):
         "customer_id": str(stub.customer_id),
         "payment_id": str(stub.payment_id),
     }
-    resp = client.post("/v1/recovery/evaluate-decision", json=payload)
+    headers = {"Authorization": f"Bearer {stub.customer_id}"}
+    resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
 
     assert resp.status_code == status.HTTP_200_OK
     assert mock_svc.invoked is True
@@ -326,7 +436,61 @@ def test_service_isolation_with_dependency_override(client):
 
 
 # ============================================================================
-# 5. Health & OpenAPI Regressions
+# 6. Shared Application-Scoped VectorIndex Tests
+# ============================================================================
+
+
+def test_shared_vector_index_persistence_across_requests(client, test_db_session):
+    """Verify that multiple requests/service resolutions use the same shared VectorIndex."""
+    shared_index = get_vector_index()
+    embedding_service = get_embedding_service()
+
+    customer, payment, _ = _seed_customer_payment_opportunity(
+        test_db_session, failure_reason="insufficient_funds", payment_method="card"
+    )
+
+    # 1. Add historical document to shared index
+    hist_doc = RetrievalDocument(
+        case_id=uuid.uuid4(),
+        text="failure_reason: insufficient_funds\npayment_method: card\namount: 3000.00\ncurrency: INR\nrecovery_action: payment_link\nrecovery_status: recovered\nwas_recovered: true\namount_recovered: 3000.00",
+        metadata={
+            "customer_id": str(customer.id),
+            "amount": 3000.0,
+            "was_recovered": True,
+            "recovery_action": "payment_link",
+        },
+    )
+    shared_index.add(hist_doc, embedding_service.embed(hist_doc.text))
+
+    # 2. First HTTP request retrieves RAG evidence from shared index
+    payload = {
+        "customer_id": str(customer.id),
+        "payment_id": str(payment.id),
+        "use_rag": True,
+    }
+    headers = {"Authorization": f"Bearer {customer.id}"}
+
+    resp1 = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
+    assert resp1.status_code == status.HTTP_200_OK
+    data1 = resp1.json()
+    assert data1["historical_rag_used"] is True
+    assert data1["retrieved_evidence_count"] >= 1
+
+    # 3. Second HTTP request also retrieves from the same populated shared index
+    resp2 = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
+    assert resp2.status_code == status.HTTP_200_OK
+    data2 = resp2.json()
+    assert data2["historical_rag_used"] is True
+    assert data2["retrieved_evidence_count"] >= 1
+
+    # 4. Resolving RecoveryService again does not recreate/wipe the shared index
+    new_service = get_recovery_service()
+    assert new_service.vector_index is shared_index
+    assert new_service.vector_index.size == shared_index.size
+
+
+# ============================================================================
+# 7. Health & OpenAPI Regressions
 # ============================================================================
 
 
@@ -347,7 +511,11 @@ def test_openapi_schema_contains_recovery_endpoint(client):
 
     paths = schema.get("paths", {})
     assert "/v1/recovery/evaluate-decision" in paths
-    recovery_post = paths["v1/recovery/evaluate-decision"]["post"] if "v1/recovery/evaluate-decision" in paths else paths["/v1/recovery/evaluate-decision"]["post"]
+    recovery_post = (
+        paths["v1/recovery/evaluate-decision"]["post"]
+        if "v1/recovery/evaluate-decision" in paths
+        else paths["/v1/recovery/evaluate-decision"]["post"]
+    )
 
     assert "Recovery" in recovery_post.get("tags", [])
     assert recovery_post.get("summary") == "Evaluate Failed Payment Recovery Decision"

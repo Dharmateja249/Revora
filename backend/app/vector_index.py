@@ -1,8 +1,10 @@
 """
 Revora In-Memory Vector Index and Cosine Similarity Search.
 
-Provides a decoupled, thread-safe, in-memory vector storage and exact nearest-neighbor
-cosine similarity search engine for RetrievalDocument representations without external dependencies.
+Provides a decoupled, in-memory vector storage and exact nearest-neighbor
+cosine similarity search engine for RetrievalDocument representations without
+external dependencies. Instances are not thread-safe; callers must serialize
+concurrent access.
 """
 
 from collections import OrderedDict
@@ -218,3 +220,16 @@ class VectorIndex:
     def clear(self) -> None:
         """Clear all entries from the index."""
         self._entries.clear()
+
+
+# Application-scoped default VectorIndex instance
+_shared_vector_index: Optional[VectorIndex] = None
+
+
+def get_vector_index() -> VectorIndex:
+    """Retrieve or initialize the application-scoped shared VectorIndex instance."""
+    global _shared_vector_index
+    if _shared_vector_index is None:
+        _shared_vector_index = VectorIndex()
+    return _shared_vector_index
+

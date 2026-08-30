@@ -54,10 +54,8 @@ class HybridHistoricalRetriever:
             if deterministic_retriever is not None
             else HistoricalRetriever()
         )
-        self.semantic_retriever = (
+        self.semantic_retriever: Optional[SemanticHistoricalRetriever] = (
             semantic_retriever
-            if semantic_retriever is not None
-            else SemanticHistoricalRetriever(vector_index=None, embedding_service=None)  # type: ignore
         )
         self.rrf_k = rrf_k
         self.deterministic_fetch_k = deterministic_fetch_k
@@ -93,8 +91,13 @@ class HybridHistoricalRetriever:
         det_cases = self.deterministic_retriever.retrieve_relevant_cases(
             context=context, top_k=fetch_k_det
         )
-        sem_cases = self.semantic_retriever.retrieve(
-            context=context, top_k=fetch_k_sem
+        sem_cases = (
+            self.semantic_retriever.retrieve(
+                context=context,
+                top_k=fetch_k_sem,
+            )
+            if self.semantic_retriever is not None
+            else []
         )
 
         # If both retrievers return empty, return immediately

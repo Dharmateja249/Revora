@@ -129,6 +129,9 @@ def construct_canonical_case_text(case: HistoricalCase) -> str:
     return "\n".join(lines)
 
 
+PII_KEY_TOKENS = ("name", "email", "phone", "address")
+
+
 def historical_case_to_document(case: HistoricalCase) -> RetrievalDocument:
     """
     Convert an immutable HistoricalCase into a canonical RetrievalDocument.
@@ -162,12 +165,16 @@ def historical_case_to_document(case: HistoricalCase) -> RetrievalDocument:
     if case.relevance_score is not None:
         doc_metadata["relevance_score"] = case.relevance_score
 
-    # Include existing case metadata if present (excluding any PII keys)
+    # Include existing case metadata if present (excluding any PII keys and protecting canonical keys)
     if case.metadata:
         unfrozen = _unfreeze_for_serialization(case.metadata)
         for k, v in unfrozen.items():
-            if k.lower() not in ("name", "email", "phone", "address"):
-                doc_metadata[k] = v
+            key_norm = str(k).strip().lower()
+            if any(token in key_norm for token in PII_KEY_TOKENS):
+                continue
+            if key_norm in doc_metadata:
+                continue
+            doc_metadata[key_norm] = v
 
     return RetrievalDocument(
         case_id=case.payment_id,

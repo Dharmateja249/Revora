@@ -498,3 +498,45 @@ def test_end_to_end_hybrid_retrieval_pipeline():
     # Case 2 ranks #2
     assert results[1].payment_id == p2
     assert results[1].relevance_score < results[0].relevance_score
+
+
+def test_hybrid_retriever_without_semantic_retriever_deterministic_only():
+    """Verify HybridHistoricalRetriever works in deterministic-only mode when semantic_retriever is None."""
+    cid = uuid.uuid4()
+    p1 = uuid.uuid4()
+    c1 = _create_case(p1, cid, 1000.0, "card", "timeout", 0.8)
+
+    mock_det = MockRetriever([c1])
+    hybrid = HybridHistoricalRetriever(
+        deterministic_retriever=mock_det,  # type: ignore
+        semantic_retriever=None,
+        rrf_k=60,
+    )
+
+    assert hybrid.semantic_retriever is None
+
+    context = CustomerRecoveryContext(
+        customer=CustomerContext(customer_id=cid),
+        current_payment=PaymentContext(
+            payment_id=uuid.uuid4(),
+            amount=1000.0,
+            payment_method="card",
+            status="failed",
+        ),
+    )
+
+    results = hybrid.retrieve_relevant_cases(context, top_k=5)
+    assert len(results) == 1
+    assert results[0].payment_id == p1
+    assert results[0].metadata["deterministic_rank"] == 1
+    assert results[0].metadata["semantic_rank"] is None
+    assert mock_det.invoked is True
+
+
+def test_hybrid_retriever_default_instantiation_without_arguments():
+    """Verify HybridHistoricalRetriever() can be constructed with no arguments without raising TypeError."""
+    hybrid = HybridHistoricalRetriever()
+    assert hybrid.semantic_retriever is None
+    assert hybrid.deterministic_retriever is not None
+    assert hybrid.rrf_k == DEFAULT_RRF_K
+

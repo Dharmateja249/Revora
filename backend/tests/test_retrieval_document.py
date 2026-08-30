@@ -243,6 +243,84 @@ def test_pii_fields_strictly_absent():
     assert doc.metadata["valid_key"] == "safe_data"
 
 
+def test_compound_and_mixed_case_pii_keys_rejected():
+    """Verify compound and mixed-case PII keys are filtered out of document metadata."""
+    case = HistoricalCase(
+        payment_id=uuid.uuid4(),
+        customer_id=uuid.uuid4(),
+        amount=500.0,
+        payment_method="card",
+        recovery_status="failed",
+        metadata={
+            "customer_name": "Alice Smith",
+            "Customer_Email": "alice@example.com",
+            "billing_address": "456 Market St",
+            "phone_number": "+987654321",
+            "CUSTOMER_PHONE": "+1122334455",
+            "shipping_address_line1": "Warehouse 7",
+            "user_name": "asmith",
+            "legitimate_tag": "high_priority",
+            "attempt_count": 3,
+        },
+    )
+
+    doc = historical_case_to_document(case)
+
+    # None of the PII keys should be in metadata (case-insensitive check)
+    for forbidden in [
+        "customer_name",
+        "customer_email",
+        "billing_address",
+        "phone_number",
+        "customer_phone",
+        "shipping_address_line1",
+        "user_name",
+    ]:
+        assert forbidden not in doc.metadata
+
+    # Legitimate non-PII metadata must be preserved
+    assert doc.metadata["legitimate_tag"] == "high_priority"
+    assert doc.metadata["attempt_count"] == 3
+
+
+def test_caller_metadata_cannot_override_canonical_fields():
+    """Verify caller-supplied metadata cannot overwrite canonical document fields."""
+    pid = uuid.uuid4()
+    cid = uuid.uuid4()
+    spoofed_pid = str(uuid.uuid4())
+    spoofed_cid = str(uuid.uuid4())
+
+    case = HistoricalCase(
+        payment_id=pid,
+        customer_id=cid,
+        amount=500.0,
+        currency="INR",
+        payment_method="card",
+        recovery_status="failed",
+        amount_recovered=0.0,
+        was_recovered=False,
+        metadata={
+            "payment_id": spoofed_pid,
+            "customer_id": spoofed_cid,
+            "was_recovered": True,
+            "amount_recovered": 9999.0,
+            "amount": 1.0,
+            "custom_campaign_id": "summer_sale",
+        },
+    )
+
+    doc = historical_case_to_document(case)
+
+    # Canonical fields must retain their authentic values
+    assert doc.metadata["payment_id"] == str(pid)
+    assert doc.metadata["customer_id"] == str(cid)
+    assert doc.metadata["was_recovered"] is False
+    assert doc.metadata["amount_recovered"] == 0.0
+    assert doc.metadata["amount"] == 500.0
+    # Custom non-canonical field is preserved
+    assert doc.metadata["custom_campaign_id"] == "summer_sale"
+
+
 # ============================================================================
 # 5. Immutability & Mutation Isolation
 # ============================================================================

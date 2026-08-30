@@ -6,7 +6,7 @@ using dense semantic embeddings, canonical query text representation, and Vector
 similarity search.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -15,6 +15,23 @@ from app.embedding_service import EmbeddingService
 from app.historical_retrieval import HistoricalCase
 from app.retrieval_document import RetrievalDocument
 from app.vector_index import VectorIndex, VectorSearchResult
+
+
+def _normalize_datetime(dt: Any) -> Optional[datetime]:
+    """Safely parse and normalize datetime objects or ISO strings to UTC-aware datetime."""
+    if isinstance(dt, datetime):
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    if isinstance(dt, str) and dt.strip():
+        try:
+            parsed = datetime.fromisoformat(dt.strip())
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except (ValueError, TypeError):
+            return None
+    return None
 
 
 def construct_canonical_query_text(context: CustomerRecoveryContext) -> str:
@@ -77,29 +94,26 @@ def _search_result_to_historical_case(result: VectorSearchResult) -> HistoricalC
     doc = result.document
     meta = doc.metadata
 
-    # Extract mandatory customer and payment IDs
+    # Extract mandatory customer and payment IDs (Fail closed: never fallback to payment_id)
     payment_id = doc.case_id
     raw_cust_id = meta.get("customer_id")
     if isinstance(raw_cust_id, UUID):
         customer_id = raw_cust_id
     elif isinstance(raw_cust_id, str):
-        customer_id = UUID(raw_cust_id)
+        try:
+            customer_id = UUID(raw_cust_id)
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ValueError(f"Invalid customer_id in document metadata: {raw_cust_id!r}") from exc
     else:
-        customer_id = payment_id
+        raise ValueError(f"Missing or invalid customer_id in document metadata: {raw_cust_id!r}")
 
     # Parse timestamps if present in metadata
     created_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     if "created_at" in meta and meta["created_at"]:
-        try:
-            created_at = datetime.fromisoformat(meta["created_at"])
-        except (ValueError, TypeError):
-            created_at = None
+        created_at = _normalize_datetime(meta["created_at"])
     if "completed_at" in meta and meta["completed_at"]:
-        try:
-            completed_at = datetime.fromisoformat(meta["completed_at"])
-        except (ValueError, TypeError):
-            completed_at = None
+        completed_at = _normalize_datetime(meta["completed_at"])
 
     # Relevance score bounded strictly to [0.0, 1.0]
     bounded_relevance = round(max(0.0, min(1.0, result.similarity_score)), 4)
@@ -204,22 +218,37 @@ class SemanticHistoricalRetriever:
             if current_payment_id is not None and doc.case_id == current_payment_id:
                 continue
 
-            # Rule B: Tenant / Customer Isolation
-            doc_customer_id = meta.get("customer_id")
-            if doc_customer_id and str(doc_customer_id) != current_customer_id_str:
+            # Rule B: Tenant / Customer Isolation (Fail closed: reject missing, malformed, or mismatching)
+            raw_cust_id = meta.get("customer_id")
+            if not raw_cust_id:
+                continue
+            try:
+                if isinstance(raw_cust_id, UUID):
+                    doc_cust_uuid = raw_cust_id
+                elif isinstance(raw_cust_id, str):
+                    doc_cust_uuid = UUID(raw_cust_id)
+                else:
+                    continue
+            except (ValueError, TypeError, AttributeError):
                 continue
 
-            # Rule C: Temporal Isolation (Historical cases must precede or equal current payment)
+            if doc_cust_uuid != context.customer.customer_id:
+                continue
+
+            # Rule C: Temporal Isolation (Historical cases must precede or equal current payment; fail closed)
             if current_created_at is not None and "created_at" in meta and meta["created_at"]:
-                try:
-                    doc_created_at = datetime.fromisoformat(meta["created_at"])
-                    if doc_created_at > current_created_at:
-                        continue
-                except (ValueError, TypeError):
-                    pass
+                doc_created_at = _normalize_datetime(meta["created_at"])
+                norm_current_created_at = _normalize_datetime(current_created_at)
+                if doc_created_at is None or norm_current_created_at is None:
+                    continue
+                if doc_created_at > norm_current_created_at:
+                    continue
 
             # Convert to canonical HistoricalCase
-            case = _search_result_to_historical_case(result)
+            try:
+                case = _search_result_to_historical_case(result)
+            except ValueError:
+                continue
             filtered_cases.append(case)
 
             if len(filtered_cases) >= top_k:

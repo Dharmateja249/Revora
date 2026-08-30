@@ -23,7 +23,7 @@ from app.schemas.recovery import (
     RecoveryEvaluationResponse,
 )
 from app.semantic_historical_retriever import SemanticHistoricalRetriever
-from app.vector_index import VectorIndex
+from app.vector_index import VectorIndex, get_vector_index
 
 logger = logging.getLogger("revora.recovery_service")
 
@@ -51,8 +51,14 @@ class RecoveryService:
     ):
         self.decision_engine = decision_engine or DecisionEngine()
         self.hybrid_retriever = hybrid_retriever
-        self.vector_index = vector_index or VectorIndex()
-        self.embedding_service = embedding_service or get_embedding_service()
+        self.vector_index = (
+            vector_index if isinstance(vector_index, VectorIndex) else get_vector_index()
+        )
+        self.embedding_service = (
+            embedding_service
+            if isinstance(embedding_service, EmbeddingService)
+            else get_embedding_service()
+        )
 
     def _resolve_retriever(self, db_session: Session) -> HybridHistoricalRetriever:
         """Resolve or construct the HybridHistoricalRetriever bound to the active database session."""
