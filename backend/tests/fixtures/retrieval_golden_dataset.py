@@ -1,0 +1,675 @@
+"""
+Revora Retrieval Golden Evaluation Dataset Fixture.
+
+Provides a deterministic, version-controlled benchmark dataset of 50 diverse
+payment failure evaluation scenarios (EvaluationCase) with explicitly graded
+business ground-truth judgments (GroundTruthJudgment).
+
+Independent of production retrieval algorithms and scoring formulas.
+"""
+
+from datetime import datetime, timezone
+from typing import Dict, List, Tuple
+from uuid import UUID
+
+from app.context import (
+    CustomerContext,
+    CustomerRecoveryContext,
+    CustomerRecoveryStatsContext,
+    HistoricalPaymentContext,
+    PaymentContext,
+    RecoveryOpportunityContext,
+)
+from app.evaluation.schemas import EvaluationCase, GroundTruthJudgment
+
+
+def _make_uuid(domain_idx: int, item_idx: int) -> UUID:
+    """Generate deterministic, fixed UUIDs without random seeds."""
+    return UUID(f"00000000-0000-{domain_idx:04x}-0000-{item_idx:012x}")
+
+
+def _build_evaluation_cases() -> Tuple[EvaluationCase, ...]:
+    """
+    Construct 50 deterministic, rich evaluation cases covering diverse payment rails,
+    failure categories, monetary scales, and edge cases.
+    """
+    cases: List[EvaluationCase] = []
+
+    # Common deterministic timestamp anchors
+    T_QUERY = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+    T_PAST_RECENT = datetime(2026, 6, 10, 14, 30, 0, tzinfo=timezone.utc)
+    T_PAST_MID = datetime(2026, 5, 25, 9, 15, 0, tzinfo=timezone.utc)
+    T_PAST_OLD = datetime(2026, 4, 1, 16, 45, 0, tzinfo=timezone.utc)
+    T_FUTURE_INVALID = datetime(2026, 7, 1, 10, 0, 0, tzinfo=timezone.utc)
+    T_SAME_TIMESTAMP = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+    # 50 Detailed Scenarios
+    # Each scenario defines:
+    # (scenario_id, customer_idx, payment_method, failure_reason, amount, currency, description, candidates_spec)
+    raw_scenarios = [
+        # Group 1: Transient Technical Failures on UPI (Scenarios 1-6)
+        (
+            1, 1, "upi", "bank_timeout", 450.0, "INR",
+            "UPI Bank Timeout - Prior successful retry precedent",
+            [
+                ("exact_recovered", "upi", "bank_timeout", 400.0, True, "retry_payment", T_PAST_RECENT, 3, "Same customer, identical UPI timeout, successfully recovered via retry."),
+                ("related_unrecovered", "upi", "gateway_timeout", 450.0, False, "retry_payment", T_PAST_MID, 2, "Same customer and rail, related timeout category, but unrecovered."),
+                ("diff_rail_recovered", "card", "bank_timeout", 500.0, True, "retry_payment", T_PAST_OLD, 1, "Same customer and failure, but card rail instead of UPI."),
+                ("future_invalid", "upi", "bank_timeout", 450.0, True, "retry_payment", T_FUTURE_INVALID, 0, "Temporal violation: occurred after query payment."),
+                ("cross_customer", "upi", "bank_timeout", 450.0, True, "retry_payment", T_PAST_RECENT, 0, "Security violation: belongs to different customer.", 99),
+            ]
+        ),
+        (
+            2, 2, "upi", "bank_server_down", 1200.0, "INR",
+            "UPI Bank Server Down - Prior wait-and-retry recovery",
+            [
+                ("exact_recovered", "upi", "bank_server_down", 1150.0, True, "wait_and_retry", T_PAST_RECENT, 3, "Same customer, exact server down failure on UPI, recovered via wait_and_retry."),
+                ("related_timeout", "upi", "bank_timeout", 1200.0, True, "retry_payment", T_PAST_MID, 2, "Same customer and rail, related transient issue, recovered via retry."),
+                ("unrelated_perm", "upi", "account_closed", 1000.0, False, "no_action", T_PAST_OLD, 0, "Permanent account closure failure on UPI, completely unhelpful for transient server down."),
+                ("cross_customer", "upi", "bank_server_down", 1200.0, True, "wait_and_retry", T_PAST_RECENT, 0, "Cross-customer case.", 99),
+            ]
+        ),
+        (
+            3, 3, "upi", "gateway_timeout", 2500.0, "INR",
+            "UPI Gateway Timeout - Successful payment link resolution",
+            [
+                ("exact_recovered", "upi", "gateway_timeout", 2400.0, True, "payment_link", T_PAST_RECENT, 3, "Exact failure, similar amount, recovered via payment_link."),
+                ("related_network", "upi", "network_timeout", 2500.0, True, "retry_payment", T_PAST_MID, 2, "Related network timeout recovered via retry."),
+                ("different_funds", "upi", "insufficient_funds", 2500.0, False, "payment_link", T_PAST_OLD, 1, "Different failure category on same rail."),
+                ("future_invalid", "upi", "gateway_timeout", 2500.0, True, "payment_link", T_FUTURE_INVALID, 0, "Future transaction timestamp violation."),
+            ]
+        ),
+        (
+            4, 4, "upi", "network_timeout", 150.0, "INR",
+            "UPI Micro-transaction Network Timeout - Rapid retry success",
+            [
+                ("exact_recovered", "upi", "network_timeout", 150.0, True, "retry_payment", T_PAST_RECENT, 3, "Identical micro-payment network timeout recovered by retry."),
+                ("related_timeout", "upi", "timeout", 140.0, True, "retry_payment", T_PAST_MID, 2, "Generic timeout on UPI with successful recovery."),
+                ("diff_rail_perm", "card", "card_expired", 150.0, False, "change_payment_method", T_PAST_OLD, 0, "Card expired failure, irrelevant for UPI network timeout."),
+            ]
+        ),
+        (
+            5, 5, "upi", "connection_reset", 850.0, "INR",
+            "UPI Connection Reset - Prior switch to alternate payment link",
+            [
+                ("exact_recovered", "upi", "connection_reset", 800.0, True, "payment_link", T_PAST_RECENT, 3, "Exact connection reset recovered via payment link."),
+                ("related_transient", "upi", "service_unavailable", 900.0, True, "wait_and_retry", T_PAST_MID, 2, "Service unavailable transient failure recovered."),
+                ("weak_success", "card", "connection_reset", 850.0, True, "payment_link", T_PAST_OLD, 1, "Same failure on card rail."),
+            ]
+        ),
+        (
+            6, 6, "upi", "service_unavailable", 3200.0, "INR",
+            "UPI Service Unavailable - High amount with wait-and-retry",
+            [
+                ("exact_recovered", "upi", "service_unavailable", 3000.0, True, "wait_and_retry", T_PAST_RECENT, 3, "Service unavailable recovered via wait and retry."),
+                ("related_timeout", "upi", "gateway_timeout", 3200.0, False, "retry_payment", T_PAST_MID, 2, "Transient failure unrecovered."),
+                ("diff_insufficient", "upi", "insufficient_funds", 3200.0, True, "payment_link", T_PAST_OLD, 1, "Different failure category."),
+            ]
+        ),
+
+        # Group 2: Transient Technical Failures on Cards & NetBanking (Scenarios 7-12)
+        (
+            7, 7, "card", "bank_timeout", 1500.0, "INR",
+            "Card Bank Timeout - Card issuer timeout with retry success",
+            [
+                ("exact_recovered", "card", "bank_timeout", 1500.0, True, "retry_payment", T_PAST_RECENT, 3, "Card bank timeout successfully retried."),
+                ("related_transient", "card", "system_error", 1400.0, True, "retry_payment", T_PAST_MID, 2, "Card system error retried successfully."),
+                ("diff_rail", "netbanking", "bank_timeout", 1500.0, True, "retry_payment", T_PAST_OLD, 1, "Netbanking bank timeout precedent."),
+                ("future_invalid", "card", "bank_timeout", 1500.0, True, "retry_payment", T_FUTURE_INVALID, 0, "Future timestamp candidate."),
+            ]
+        ),
+        (
+            8, 8, "card", "system_error", 4200.0, "INR",
+            "Card Gateway System Error - Recovered via payment link",
+            [
+                ("exact_recovered", "card", "system_error", 4000.0, True, "payment_link", T_PAST_RECENT, 3, "Card system error resolved with payment link."),
+                ("related_timeout", "card", "network_timeout", 4200.0, True, "retry_payment", T_PAST_MID, 2, "Network timeout resolved with retry."),
+                ("unrelated_otp", "card", "otp_expired", 4200.0, False, "payment_link", T_PAST_OLD, 1, "OTP expiration on card."),
+            ]
+        ),
+        (
+            9, 9, "card", "internal_server_error", 950.0, "INR",
+            "Card Gateway 500 Error - Automatic retry success",
+            [
+                ("exact_recovered", "card", "internal_server_error", 950.0, True, "retry_payment", T_PAST_RECENT, 3, "500 internal server error recovered by retry."),
+                ("related_timeout", "card", "bank_timeout", 900.0, True, "wait_and_retry", T_PAST_MID, 2, "Bank timeout recovered by wait and retry."),
+                ("cross_customer", "card", "internal_server_error", 950.0, True, "retry_payment", T_PAST_RECENT, 0, "Cross-customer case.", 99),
+            ]
+        ),
+        (
+            10, 10, "netbanking", "bank_timeout", 12500.0, "INR",
+            "NetBanking High Value Timeout - Retry resolution",
+            [
+                ("exact_recovered", "netbanking", "bank_timeout", 12000.0, True, "retry_payment", T_PAST_RECENT, 3, "Netbanking high-value bank timeout retried successfully."),
+                ("related_transient", "netbanking", "service_unavailable", 12500.0, True, "wait_and_retry", T_PAST_MID, 2, "Netbanking service unavailable recovered."),
+                ("diff_funds", "netbanking", "insufficient_funds", 12500.0, True, "payment_link", T_PAST_OLD, 1, "Different failure category."),
+            ]
+        ),
+        (
+            11, 11, "netbanking", "service_unavailable", 7800.0, "INR",
+            "NetBanking Gateway Unavailable - Wait and retry resolution",
+            [
+                ("exact_recovered", "netbanking", "service_unavailable", 7500.0, True, "wait_and_retry", T_PAST_RECENT, 3, "Netbanking service unavailable recovered."),
+                ("related_timeout", "netbanking", "bank_timeout", 7800.0, False, "retry_payment", T_PAST_MID, 2, "Timeout unrecovered."),
+                ("diff_rail_recovered", "upi", "service_unavailable", 8000.0, True, "wait_and_retry", T_PAST_OLD, 1, "Same issue on UPI rail."),
+            ]
+        ),
+        (
+            12, 12, "wallet", "bank_server_down", 350.0, "INR",
+            "Wallet Server Down - Prior retry success",
+            [
+                ("exact_recovered", "wallet", "bank_server_down", 300.0, True, "retry_payment", T_PAST_RECENT, 3, "Wallet server down recovered by retry."),
+                ("related_timeout", "wallet", "timeout", 350.0, True, "retry_payment", T_PAST_MID, 2, "Wallet timeout recovered."),
+                ("diff_rail", "upi", "bank_server_down", 350.0, True, "retry_payment", T_PAST_OLD, 1, "UPI server down precedent."),
+            ]
+        ),
+
+        # Group 3: Insufficient Funds on Cards (Scenarios 13-18)
+        (
+            13, 13, "card", "insufficient_funds", 5400.0, "INR",
+            "Card Insufficient Funds - Payment link collection success",
+            [
+                ("exact_recovered", "card", "insufficient_funds", 5000.0, True, "payment_link", T_PAST_RECENT, 3, "Card low balance recovered via payment_link."),
+                ("related_low_bal", "card", "low_balance", 5400.0, True, "payment_link", T_PAST_MID, 2, "Synonymous low_balance recovered via payment_link."),
+                ("diff_action_fail", "card", "insufficient_funds", 5400.0, False, "retry_payment", T_PAST_OLD, 1, "Same failure but failed retry attempt."),
+                ("cross_customer", "card", "insufficient_funds", 5400.0, True, "payment_link", T_PAST_RECENT, 0, "Cross-customer case.", 99),
+            ]
+        ),
+        (
+            14, 14, "card", "low_balance", 2800.0, "INR",
+            "Card Low Balance - Switch to alternate card success",
+            [
+                ("exact_recovered", "card", "low_balance", 2800.0, True, "change_payment_method", T_PAST_RECENT, 3, "Low balance recovered by changing payment method."),
+                ("related_funds", "card", "insufficient_funds", 2500.0, True, "payment_link", T_PAST_MID, 2, "Insufficient funds resolved via payment link."),
+                ("diff_rail", "upi", "low_balance", 2800.0, True, "change_payment_method", T_PAST_OLD, 1, "Same issue on UPI rail."),
+            ]
+        ),
+        (
+            15, 15, "card", "balance_insufficient", 1850.0, "INR",
+            "Card Balance Insufficient - Payment link resolution",
+            [
+                ("exact_recovered", "card", "balance_insufficient", 1800.0, True, "payment_link", T_PAST_RECENT, 3, "Balance insufficient recovered via payment link."),
+                ("related_funds", "card", "insufficient_funds", 1850.0, True, "payment_link", T_PAST_MID, 2, "Insufficient funds category match."),
+                ("future_invalid", "card", "balance_insufficient", 1850.0, True, "payment_link", T_FUTURE_INVALID, 0, "Future transaction timestamp."),
+            ]
+        ),
+        (
+            16, 16, "card", "limit_exceeded", 45000.0, "INR",
+            "Card Limit Exceeded - Split/change payment method success",
+            [
+                ("exact_recovered", "card", "limit_exceeded", 40000.0, True, "change_payment_method", T_PAST_RECENT, 3, "Card credit limit exceeded resolved by method change."),
+                ("related_daily_limit", "card", "daily_limit_exceeded", 45000.0, True, "payment_link", T_PAST_MID, 2, "Daily limit exceeded resolved by payment link."),
+                ("diff_rail", "netbanking", "limit_exceeded", 45000.0, True, "change_payment_method", T_PAST_OLD, 1, "Netbanking limit exceeded precedent."),
+            ]
+        ),
+        (
+            17, 17, "card", "daily_limit_exceeded", 22000.0, "INR",
+            "Card Daily Limit Exceeded - Wait and retry next day success",
+            [
+                ("exact_recovered", "card", "daily_limit_exceeded", 20000.0, True, "wait_and_retry", T_PAST_RECENT, 3, "Daily limit exceeded recovered via wait_and_retry."),
+                ("related_limit", "card", "limit_exceeded", 22000.0, True, "change_payment_method", T_PAST_MID, 2, "Limit exceeded recovered by method change."),
+                ("diff_timeout", "card", "bank_timeout", 22000.0, True, "retry_payment", T_PAST_OLD, 1, "Different failure category."),
+            ]
+        ),
+        (
+            18, 18, "card", "exceeds_limit", 16000.0, "INR",
+            "Card Exceeds Limit - Payment link resolution",
+            [
+                ("exact_recovered", "card", "exceeds_limit", 15000.0, True, "payment_link", T_PAST_RECENT, 3, "Exceeds limit recovered via payment link."),
+                ("related_funds", "card", "insufficient_funds", 16000.0, True, "payment_link", T_PAST_MID, 2, "Insufficient funds category match."),
+                ("cross_customer", "card", "exceeds_limit", 16000.0, True, "payment_link", T_PAST_RECENT, 0, "Cross-customer case.", 99),
+            ]
+        ),
+
+        # Group 4: Insufficient Funds on UPI, NetBanking, Wallet (Scenarios 19-24)
+        (
+            19, 19, "upi", "insufficient_funds", 650.0, "INR",
+            "UPI Insufficient Funds - Payment link to alternate bank",
+            [
+                ("exact_recovered", "upi", "insufficient_funds", 600.0, True, "payment_link", T_PAST_RECENT, 3, "UPI insufficient funds recovered via payment_link."),
+                ("related_low_bal", "upi", "low_balance", 650.0, True, "payment_link", T_PAST_MID, 2, "Low balance recovered via payment link."),
+                ("diff_rail", "card", "insufficient_funds", 650.0, True, "payment_link", T_PAST_OLD, 1, "Card insufficient funds precedent."),
+            ]
+        ),
+        (
+            20, 20, "upi", "low_balance", 1100.0, "INR",
+            "UPI Low Balance - Payment link recovery",
+            [
+                ("exact_recovered", "upi", "low_balance", 1000.0, True, "payment_link", T_PAST_RECENT, 3, "UPI low balance recovered via payment link."),
+                ("related_funds", "upi", "insufficient_funds", 1100.0, False, "retry_payment", T_PAST_MID, 2, "Related failure unrecovered."),
+                ("diff_timeout", "upi", "bank_timeout", 1100.0, True, "retry_payment", T_PAST_OLD, 1, "Timeout precedent."),
+            ]
+        ),
+        (
+            21, 21, "upi", "daily_limit_exceeded", 50000.0, "INR",
+            "UPI Daily Limit Exceeded - Change to NetBanking resolution",
+            [
+                ("exact_recovered", "upi", "daily_limit_exceeded", 45000.0, True, "change_payment_method", T_PAST_RECENT, 3, "UPI daily limit resolved by changing payment method."),
+                ("related_limit", "upi", "limit_exceeded", 50000.0, True, "payment_link", T_PAST_MID, 2, "Limit exceeded resolved by payment link."),
+                ("future_invalid", "upi", "daily_limit_exceeded", 50000.0, True, "change_payment_method", T_FUTURE_INVALID, 0, "Future candidate."),
+            ]
+        ),
+        (
+            22, 22, "netbanking", "insufficient_funds", 18000.0, "INR",
+            "NetBanking Insufficient Funds - Payment link recovery",
+            [
+                ("exact_recovered", "netbanking", "insufficient_funds", 17500.0, True, "payment_link", T_PAST_RECENT, 3, "Netbanking insufficient funds recovered via payment link."),
+                ("related_funds", "netbanking", "low_balance", 18000.0, True, "payment_link", T_PAST_MID, 2, "Netbanking low balance recovered."),
+                ("diff_rail", "upi", "insufficient_funds", 18000.0, True, "payment_link", T_PAST_OLD, 1, "UPI insufficient funds precedent."),
+            ]
+        ),
+        (
+            23, 23, "netbanking", "limit_exceeded", 85000.0, "INR",
+            "NetBanking Limit Exceeded - Change payment method resolution",
+            [
+                ("exact_recovered", "netbanking", "limit_exceeded", 80000.0, True, "change_payment_method", T_PAST_RECENT, 3, "Netbanking limit exceeded resolved by method change."),
+                ("related_limit", "netbanking", "daily_limit_exceeded", 85000.0, True, "wait_and_retry", T_PAST_MID, 2, "Daily limit recovered via wait and retry."),
+                ("cross_customer", "netbanking", "limit_exceeded", 85000.0, True, "change_payment_method", T_PAST_RECENT, 0, "Cross-customer case.", 99),
+            ]
+        ),
+        (
+            24, 24, "wallet", "insufficient_funds", 250.0, "INR",
+            "Wallet Insufficient Balance - Payment link recovery",
+            [
+                ("exact_recovered", "wallet", "insufficient_funds", 200.0, True, "payment_link", T_PAST_RECENT, 3, "Wallet insufficient funds recovered by payment link."),
+                ("related_funds", "wallet", "low_balance", 250.0, True, "payment_link", T_PAST_MID, 2, "Wallet low balance recovered."),
+                ("diff_rail", "upi", "insufficient_funds", 250.0, True, "payment_link", T_PAST_OLD, 1, "UPI insufficient funds precedent."),
+            ]
+        ),
+
+        # Group 5: Customer Interaction & Authentication Failures (Scenarios 25-32)
+        (
+            25, 25, "card", "otp_expired", 1600.0, "INR",
+            "Card OTP Expired - Payment link sent for fresh OTP flow",
+            [
+                ("exact_recovered", "card", "otp_expired", 1500.0, True, "payment_link", T_PAST_RECENT, 3, "OTP expired recovered via payment link."),
+                ("related_timeout", "card", "otp_timeout", 1600.0, True, "payment_link", T_PAST_MID, 2, "OTP timeout recovered via payment link."),
+                ("diff_auth", "card", "authentication_failed", 1600.0, True, "retry_payment", T_PAST_OLD, 1, "Authentication failed recovered."),
+                ("future_invalid", "card", "otp_expired", 1600.0, True, "payment_link", T_FUTURE_INVALID, 0, "Future candidate."),
+            ]
+        ),
+        (
+            26, 26, "card", "otp_timeout", 2100.0, "INR",
+            "Card OTP Timeout - Retry with payment link",
+            [
+                ("exact_recovered", "card", "otp_timeout", 2000.0, True, "payment_link", T_PAST_RECENT, 3, "Card OTP timeout recovered via payment link."),
+                ("related_otp", "card", "otp_expired", 2100.0, True, "payment_link", T_PAST_MID, 2, "OTP expired recovered via payment link."),
+                ("unrelated_funds", "card", "insufficient_funds", 2100.0, True, "payment_link", T_PAST_OLD, 1, "Different failure category."),
+            ]
+        ),
+        (
+            27, 27, "card", "3ds_failed", 3500.0, "INR",
+            "Card 3DS Authentication Failed - Payment link re-trigger",
+            [
+                ("exact_recovered", "card", "3ds_failed", 3200.0, True, "payment_link", T_PAST_RECENT, 3, "3DS failed recovered via payment link."),
+                ("related_auth", "card", "authentication_failed", 3500.0, True, "payment_link", T_PAST_MID, 2, "Authentication failed recovered via payment link."),
+                ("diff_rail", "upi", "3ds_failed", 3500.0, True, "payment_link", T_PAST_OLD, 1, "Different payment rail."),
+            ]
+        ),
+        (
+            28, 28, "card", "authentication_failed", 4800.0, "INR",
+            "Card Authentication Failed - Direct retry success",
+            [
+                ("exact_recovered", "card", "authentication_failed", 4500.0, True, "payment_link", T_PAST_RECENT, 3, "Auth failed recovered via payment link."),
+                ("related_3ds", "card", "3ds_failed", 4800.0, False, "retry_payment", T_PAST_MID, 2, "3DS failed unrecovered."),
+                ("cross_customer", "card", "authentication_failed", 4800.0, True, "payment_link", T_PAST_RECENT, 0, "Cross-customer case.", 99),
+            ]
+        ),
+        (
+            29, 29, "upi", "pin_incorrect", 750.0, "INR",
+            "UPI Incorrect PIN - Payment link for re-entry",
+            [
+                ("exact_recovered", "upi", "pin_incorrect", 700.0, True, "payment_link", T_PAST_RECENT, 3, "UPI incorrect PIN recovered via payment link."),
+                ("related_auth", "upi", "authentication_failed", 750.0, True, "payment_link", T_PAST_MID, 2, "UPI auth failed recovered via payment link."),
+                ("diff_funds", "upi", "insufficient_funds", 750.0, True, "payment_link", T_PAST_OLD, 1, "Different failure category on UPI."),
+            ]
+        ),
+        (
+            30, 30, "upi", "user_cancelled", 1250.0, "INR",
+            "UPI User Cancelled - Follow-up payment link recovery",
+            [
+                ("exact_recovered", "upi", "user_cancelled", 1200.0, True, "payment_link", T_PAST_RECENT, 3, "User cancelled recovered via payment link."),
+                ("related_cancel", "upi", "customer_cancelled", 1250.0, True, "payment_link", T_PAST_MID, 2, "Customer cancelled recovered via payment link."),
+                ("diff_rail", "card", "user_cancelled", 1250.0, True, "payment_link", T_PAST_OLD, 1, "Card user cancelled precedent."),
+            ]
+        ),
+        (
+            31, 31, "upi", "customer_cancelled", 920.0, "INR",
+            "UPI Customer Cancelled - Reminder link recovery",
+            [
+                ("exact_recovered", "upi", "customer_cancelled", 900.0, True, "payment_link", T_PAST_RECENT, 3, "Customer cancelled recovered via payment link."),
+                ("related_cancel", "upi", "user_cancelled", 920.0, True, "payment_link", T_PAST_MID, 2, "User cancelled recovered via payment link."),
+                ("future_invalid", "upi", "customer_cancelled", 920.0, True, "payment_link", T_FUTURE_INVALID, 0, "Future transaction timestamp."),
+            ]
+        ),
+        (
+            32, 32, "card", "declined_by_user", 3100.0, "INR",
+            "Card Declined by User - Payment link conversion",
+            [
+                ("exact_recovered", "card", "declined_by_user", 3000.0, True, "payment_link", T_PAST_RECENT, 3, "Declined by user recovered via payment link."),
+                ("related_cancel", "card", "user_cancelled", 3100.0, True, "payment_link", T_PAST_MID, 2, "User cancelled recovered via payment link."),
+                ("diff_timeout", "card", "bank_timeout", 3100.0, True, "retry_payment", T_PAST_OLD, 1, "Different failure category."),
+            ]
+        ),
+
+        # Group 6: Permanent Failures on Cards & Accounts (Scenarios 33-40)
+        (
+            33, 33, "card", "card_expired", 1800.0, "INR",
+            "Card Expired - Change payment method resolution",
+            [
+                ("exact_recovered", "card", "card_expired", 1800.0, True, "change_payment_method", T_PAST_RECENT, 3, "Card expired resolved by changing payment method."),
+                ("related_exp", "card", "expired_card", 1750.0, True, "change_payment_method", T_PAST_MID, 2, "Expired card synonym resolved by changing method."),
+                ("diff_action_fail", "card", "card_expired", 1800.0, False, "retry_payment", T_PAST_OLD, 1, "Same failure but invalid retry action."),
+                ("cross_customer", "card", "card_expired", 1800.0, True, "change_payment_method", T_PAST_RECENT, 0, "Cross-customer case.", 99),
+            ]
+        ),
+        (
+            34, 34, "card", "expired_card", 2400.0, "INR",
+            "Expired Card - Payment link with new card entry",
+            [
+                ("exact_recovered", "card", "expired_card", 2200.0, True, "change_payment_method", T_PAST_RECENT, 3, "Expired card recovered by changing payment method."),
+                ("related_exp", "card", "card_expired", 2400.0, True, "payment_link", T_PAST_MID, 2, "Card expired resolved by payment link."),
+                ("diff_invalid_card", "card", "invalid_card", 2400.0, True, "change_payment_method", T_PAST_OLD, 1, "Invalid card precedent."),
+            ]
+        ),
+        (
+            35, 35, "card", "invalid_cvv", 950.0, "INR",
+            "Card Invalid CVV - Payment link for CVV correction",
+            [
+                ("exact_recovered", "card", "invalid_cvv", 900.0, True, "payment_link", T_PAST_RECENT, 3, "Invalid CVV recovered via payment link."),
+                ("related_perm", "card", "invalid_card", 950.0, True, "change_payment_method", T_PAST_MID, 2, "Invalid card recovered via method change."),
+                ("diff_timeout", "card", "bank_timeout", 950.0, True, "retry_payment", T_PAST_OLD, 1, "Transient timeout precedent."),
+            ]
+        ),
+        (
+            36, 36, "card", "invalid_card_number", 1400.0, "INR",
+            "Card Invalid Number - Change payment method resolution",
+            [
+                ("exact_recovered", "card", "invalid_card_number", 1350.0, True, "change_payment_method", T_PAST_RECENT, 3, "Invalid card number resolved by changing method."),
+                ("related_perm", "card", "invalid_card", 1400.0, True, "change_payment_method", T_PAST_MID, 2, "Invalid card resolved by method change."),
+                ("future_invalid", "card", "invalid_card_number", 1400.0, True, "change_payment_method", T_FUTURE_INVALID, 0, "Future transaction timestamp."),
+            ]
+        ),
+        (
+            37, 37, "card", "blocked_account", 6200.0, "INR",
+            "Card Blocked Account - Change payment method to UPI",
+            [
+                ("exact_recovered", "card", "blocked_account", 6000.0, True, "change_payment_method", T_PAST_RECENT, 3, "Blocked account resolved by changing payment method."),
+                ("related_perm", "card", "do_not_honor", 6200.0, True, "change_payment_method", T_PAST_MID, 2, "Do not honor resolved by changing payment method."),
+                ("diff_rail", "netbanking", "blocked_account", 6200.0, True, "change_payment_method", T_PAST_OLD, 1, "Netbanking blocked account precedent."),
+            ]
+        ),
+        (
+            38, 38, "card", "do_not_honor", 4100.0, "INR",
+            "Card Do Not Honor - Change payment method resolution",
+            [
+                ("exact_recovered", "card", "do_not_honor", 4000.0, True, "change_payment_method", T_PAST_RECENT, 3, "Do not honor resolved by changing payment method."),
+                ("related_perm", "card", "account_closed", 4100.0, True, "change_payment_method", T_PAST_MID, 2, "Account closed resolved by method change."),
+                ("cross_customer", "card", "do_not_honor", 4100.0, True, "change_payment_method", T_PAST_RECENT, 0, "Cross-customer case.", 99),
+            ]
+        ),
+        (
+            39, 39, "netbanking", "account_closed", 8800.0, "INR",
+            "NetBanking Account Closed - Switch to Card resolution",
+            [
+                ("exact_recovered", "netbanking", "account_closed", 8500.0, True, "change_payment_method", T_PAST_RECENT, 3, "Account closed resolved by changing payment method."),
+                ("related_perm", "netbanking", "invalid_account", 8800.0, True, "change_payment_method", T_PAST_MID, 2, "Invalid account resolved by changing method."),
+                ("diff_rail", "card", "account_closed", 8800.0, True, "change_payment_method", T_PAST_OLD, 1, "Card account closed precedent."),
+            ]
+        ),
+        (
+            40, 40, "netbanking", "invalid_account", 5200.0, "INR",
+            "NetBanking Invalid Account - Change to UPI recovery",
+            [
+                ("exact_recovered", "netbanking", "invalid_account", 5000.0, True, "change_payment_method", T_PAST_RECENT, 3, "Invalid account resolved by changing payment method."),
+                ("related_perm", "netbanking", "account_closed", 5200.0, True, "change_payment_method", T_PAST_MID, 2, "Account closed resolved by method change."),
+                ("unrelated_funds", "netbanking", "insufficient_funds", 5200.0, True, "payment_link", T_PAST_OLD, 1, "Insufficient funds precedent."),
+            ]
+        ),
+
+        # Group 7: Scale, Currency, Recency & Edge Scenarios (Scenarios 41-50)
+        (
+            41, 41, "card", "bank_timeout", 185000.0, "INR",
+            "Enterprise High Value Card Timeout - Careful retry resolution",
+            [
+                ("exact_recovered", "card", "bank_timeout", 180000.0, True, "retry_payment", T_PAST_RECENT, 3, "High-value card timeout successfully retried."),
+                ("related_transient", "card", "gateway_timeout", 185000.0, True, "wait_and_retry", T_PAST_MID, 2, "Gateway timeout recovered."),
+                ("micro_diff_val", "card", "bank_timeout", 200.0, True, "retry_payment", T_PAST_OLD, 1, "Same failure but vastly different monetary scale (200 vs 185k)."),
+            ]
+        ),
+        (
+            42, 42, "upi", "bank_timeout", 10.0, "INR",
+            "UPI Micro Payment (₹10) - Immediate retry precedent",
+            [
+                ("exact_recovered", "upi", "bank_timeout", 10.0, True, "retry_payment", T_PAST_RECENT, 3, "Exact micro payment timeout recovered by retry."),
+                ("related_timeout", "upi", "timeout", 15.0, True, "retry_payment", T_PAST_MID, 2, "Micro timeout recovered."),
+                ("large_diff_val", "upi", "bank_timeout", 50000.0, True, "retry_payment", T_PAST_OLD, 1, "Same failure but vastly different scale (50k vs 10)."),
+            ]
+        ),
+        (
+            43, 43, "card", "bank_timeout", 120.0, "USD",
+            "USD Multi-Currency Card Timeout - International retry success",
+            [
+                ("exact_recovered", "card", "bank_timeout", 120.0, True, "retry_payment", T_PAST_RECENT, 3, "USD card timeout recovered via retry."),
+                ("related_transient", "card", "system_error", 100.0, True, "retry_payment", T_PAST_MID, 2, "USD card system error recovered."),
+                ("diff_currency", "card", "bank_timeout", 9000.0, True, "retry_payment", T_PAST_OLD, 1, "Same failure but INR currency instead of USD."),
+            ]
+        ),
+        (
+            44, 44, "card", "insufficient_funds", 250.0, "USD",
+            "USD Card Insufficient Funds - Payment link recovery",
+            [
+                ("exact_recovered", "card", "insufficient_funds", 250.0, True, "payment_link", T_PAST_RECENT, 3, "USD card insufficient funds resolved via payment link."),
+                ("related_funds", "card", "low_balance", 200.0, True, "payment_link", T_PAST_MID, 2, "USD card low balance resolved via payment link."),
+                ("diff_currency", "card", "insufficient_funds", 20000.0, True, "payment_link", T_PAST_OLD, 1, "INR currency precedent."),
+            ]
+        ),
+        (
+            45, 45, "upi", "bank_timeout", 500.0, "INR",
+            "Exact Timestamp Boundary Case - Historical payment at same second as query",
+            [
+                ("exact_same_time", "upi", "bank_timeout", 500.0, True, "retry_payment", T_SAME_TIMESTAMP, 3, "Historical transaction occurred at exact same second (t_hist == t_curr), valid precedent."),
+                ("older_precedent", "upi", "bank_timeout", 500.0, True, "retry_payment", T_PAST_OLD, 2, "Older precedent on same failure."),
+                ("future_invalid", "upi", "bank_timeout", 500.0, True, "retry_payment", T_FUTURE_INVALID, 0, "Future transaction timestamp."),
+            ]
+        ),
+        (
+            46, 46, "upi", "insufficient_funds", 1500.0, "INR",
+            "Recent vs Old Recency Comparison Scenario",
+            [
+                ("recent_recovered", "upi", "insufficient_funds", 1500.0, True, "payment_link", T_PAST_RECENT, 3, "Recent identical recovery precedent."),
+                ("old_recovered", "upi", "insufficient_funds", 1500.0, True, "payment_link", T_PAST_OLD, 2, "Older recovery precedent (2 months prior)."),
+                ("unrelated_perm", "upi", "blocked_account", 1500.0, False, "no_action", T_PAST_MID, 0, "Unrelated permanent blocked account."),
+            ]
+        ),
+        (
+            47, 47, "card", "otp_timeout", 3400.0, "INR",
+            "Multiple Candidate Density Scenario",
+            [
+                ("exact_recovered_1", "card", "otp_timeout", 3400.0, True, "payment_link", T_PAST_RECENT, 3, "Exact OTP timeout recovered via payment link."),
+                ("exact_recovered_2", "card", "otp_timeout", 3200.0, True, "payment_link", T_PAST_MID, 3, "Another exact OTP timeout recovered via payment link."),
+                ("related_expired", "card", "otp_expired", 3400.0, True, "payment_link", T_PAST_OLD, 2, "Related OTP expired precedent."),
+                ("unrelated_perm", "card", "invalid_cvv", 3400.0, False, "payment_link", T_PAST_MID, 1, "Marginally related auth/card issue."),
+                ("cross_customer", "card", "otp_timeout", 3400.0, True, "payment_link", T_PAST_RECENT, 0, "Cross-customer candidate.", 99),
+            ]
+        ),
+        (
+            48, 48, "wallet", "network_timeout", 600.0, "INR",
+            "Wallet Network Timeout - Retry resolution",
+            [
+                ("exact_recovered", "wallet", "network_timeout", 600.0, True, "retry_payment", T_PAST_RECENT, 3, "Wallet network timeout resolved by retry."),
+                ("related_timeout", "wallet", "bank_timeout", 550.0, True, "retry_payment", T_PAST_MID, 2, "Wallet bank timeout resolved by retry."),
+                ("diff_rail", "upi", "network_timeout", 600.0, True, "retry_payment", T_PAST_OLD, 1, "UPI network timeout precedent."),
+            ]
+        ),
+        (
+            49, 49, "netbanking", "system_error", 14500.0, "INR",
+            "NetBanking System Error - Wait and retry resolution",
+            [
+                ("exact_recovered", "netbanking", "system_error", 14000.0, True, "wait_and_retry", T_PAST_RECENT, 3, "Netbanking system error recovered via wait and retry."),
+                ("related_timeout", "netbanking", "bank_timeout", 14500.0, True, "retry_payment", T_PAST_MID, 2, "Netbanking bank timeout recovered via retry."),
+                ("unrelated_perm", "netbanking", "account_closed", 14500.0, False, "no_action", T_PAST_OLD, 0, "Irrelevant permanent failure."),
+            ]
+        ),
+        (
+            50, 50, "upi", "bank_timeout", 1800.0, "INR",
+            "Cold-Start Customer Scenario (No positive historical precedents in valid scope)",
+            [
+                ("unrelated_perm", "upi", "card_expired", 1800.0, False, "no_action", T_PAST_OLD, 0, "Unrelated permanent failure on UPI."),
+                ("future_invalid", "upi", "bank_timeout", 1800.0, True, "retry_payment", T_FUTURE_INVALID, 0, "Future transaction timestamp (Temporal violation)."),
+                ("cross_customer", "upi", "bank_timeout", 1800.0, True, "retry_payment", T_PAST_RECENT, 0, "Cross-customer case (Tenant violation).", 99),
+            ]
+        ),
+    ]
+
+    for scenario_idx, (
+        scen_id, cust_idx, method, failure, amount, currency, description, cand_specs
+    ) in enumerate(raw_scenarios, start=1):
+        query_id = _make_uuid(10, scen_id)
+        customer_id = _make_uuid(20, cust_idx)
+        current_payment_id = _make_uuid(30, scen_id)
+        current_opp_id = _make_uuid(40, scen_id)
+
+        # 1. Build Query Context
+        cust_context = CustomerContext(
+            customer_id=customer_id,
+            external_customer_id=f"cust_ext_{cust_idx:04d}",
+            name=f"Customer {cust_idx}",
+            email=f"customer_{cust_idx}@example.com",
+            total_payments=10,
+            successful_payments=7,
+            failed_payments=3,
+            historical_success_rate=0.70,
+            created_at=datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        )
+
+        curr_payment_context = PaymentContext(
+            payment_id=current_payment_id,
+            external_payment_id=f"pay_ext_{scen_id:04d}",
+            amount=amount,
+            currency=currency,
+            payment_method=method,
+            status="failed",
+            failure_reason=failure,
+            created_at=T_QUERY,
+        )
+
+        curr_opp_context = RecoveryOpportunityContext(
+            opportunity_id=current_opp_id,
+            status="open",
+            revenue_at_risk=amount,
+            expected_recovery=amount * 0.75,
+            recommended_action=None,
+            confidence=None,
+            created_at=T_QUERY,
+        )
+
+        # 2. Build Historical Payments & Ground Truth Judgments
+        hist_payments: List[HistoricalPaymentContext] = []
+        judgments: List[GroundTruthJudgment] = []
+
+        for cand_idx, spec in enumerate(cand_specs, start=1):
+            # Parse candidate spec
+            # (name_tag, c_method, c_failure, c_amount, c_recovered, c_action, c_created_at, c_grade, c_rationale, [optional_custom_cust_idx])
+            tag = spec[0]
+            c_method = spec[1]
+            c_failure = spec[2]
+            c_amount = spec[3]
+            c_recovered = spec[4]
+            c_action = spec[5]
+            c_created_at = spec[6]
+            c_grade = spec[7]
+            c_rationale = spec[8]
+            c_cust_idx = spec[9] if len(spec) > 9 else cust_idx
+
+            cand_payment_id = _make_uuid(500 + scen_id, cand_idx)
+            cand_customer_id = _make_uuid(20, c_cust_idx)
+
+            # If candidate belongs to the same customer, include in customer's historical_payments sequence
+            if cand_customer_id == customer_id:
+                hist_p = HistoricalPaymentContext(
+                    payment_id=cand_payment_id,
+                    external_payment_id=f"hist_pay_{scen_id:03d}_{cand_idx:02d}",
+                    amount=c_amount,
+                    currency=currency,
+                    payment_method=c_method,
+                    status="succeeded" if c_recovered else "failed",
+                    failure_reason=c_failure,
+                    created_at=c_created_at,
+                    was_recovered=c_recovered,
+                    recovery_action=c_action,
+                    recovery_attempts_count=1 if c_recovered else 2,
+                )
+                hist_payments.append(hist_p)
+
+            # Ground Truth Judgment
+            judgment = GroundTruthJudgment(
+                payment_id=cand_payment_id,
+                relevance_grade=c_grade,
+                rationale=c_rationale,
+            )
+            judgments.append(judgment)
+
+        # Include explicit negative judgment for current_payment if evaluated against itself
+        judgments.append(
+            GroundTruthJudgment(
+                payment_id=current_payment_id,
+                relevance_grade=0,
+                rationale="Current payment being evaluated; must never be a valid historical retrieval precedent.",
+            )
+        )
+
+        recovery_stats = CustomerRecoveryStatsContext(
+            total_recovery_opportunities=len(hist_payments),
+            recovered_opportunities=sum(1 for p in hist_payments if p.was_recovered),
+            failed_opportunities=sum(1 for p in hist_payments if not p.was_recovered),
+            recovery_rate=(
+                sum(1 for p in hist_payments if p.was_recovered) / max(len(hist_payments), 1)
+            ),
+            previously_successful_actions=list(
+                {p.recovery_action for p in hist_payments if p.was_recovered and p.recovery_action}
+            ),
+            previously_failed_actions=list(
+                {p.recovery_action for p in hist_payments if not p.was_recovered and p.recovery_action}
+            ),
+            total_amount_recovered=sum(p.amount for p in hist_payments if p.was_recovered),
+        )
+
+        context = CustomerRecoveryContext(
+            customer=cust_context,
+            current_payment=curr_payment_context,
+            current_opportunity=curr_opp_context,
+            current_payment_attempts=[],
+            historical_payments=hist_payments,
+            recovery_statistics=recovery_stats,
+            retrieved_at=T_QUERY,
+        )
+
+        eval_case = EvaluationCase(
+            query_id=query_id,
+            context=context,
+            ground_truth=tuple(judgments),
+            description=description,
+            created_at=T_QUERY,
+            metadata={
+                "scenario_id": scen_id,
+                "payment_method": method,
+                "failure_reason": failure,
+                "currency": currency,
+                "amount": amount,
+            },
+        )
+        cases.append(eval_case)
+
+    return tuple(cases)
+
+
+# Global deterministic dataset instance
+GOLDEN_EVALUATION_CASES: Tuple[EvaluationCase, ...] = _build_evaluation_cases()
+
+
+def get_golden_evaluation_cases() -> Tuple[EvaluationCase, ...]:
+    """
+    Retrieve the immutable golden evaluation dataset containing 50 diverse evaluation cases.
+    """
+    return GOLDEN_EVALUATION_CASES
