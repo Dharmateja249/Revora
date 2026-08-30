@@ -32,6 +32,16 @@ app.add_middleware(
 )
 
 
+from app.routers.recovery import router as recovery_router
+
+# Register routers
+app.include_router(
+    recovery_router,
+    prefix="/v1/recovery",
+    tags=["Recovery"],
+)
+
+
 @app.get("/health", tags=["Health"])
 def health_check():
     """Simple health check endpoint returning service status."""
