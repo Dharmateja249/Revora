@@ -18,6 +18,7 @@ from app.historical_retrieval import HistoricalCase
 from app.historical_retriever import HistoricalRetriever
 from app.hybrid_historical_retriever import HybridHistoricalRetriever
 from app.models import AuditEvent, RecoveryOpportunity, utc_now
+from app.policies.resolver import resolve_policy_context
 from app.schemas.recovery import (
     RecoveryEvaluationRequest,
     RecoveryEvaluationResponse,
@@ -105,7 +106,15 @@ class RecoveryService:
             payment_id=request.payment_id,
         )
 
-        # 2. Execute RAG Retrieval or Pure Deterministic Flow
+        # 2. Resolve Structured Recovery Policy Context
+        max_attempts = getattr(self.decision_engine, "max_attempts", 3)
+        policy_context = resolve_policy_context(
+            context=context,
+            provider="razorpay",
+            max_attempts=max_attempts,
+        )
+
+        # 3. Execute RAG Retrieval or Pure Deterministic Flow
         retrieved_cases: Optional[List[HistoricalCase]] = None
         historical_rag_used = False
         retrieved_evidence_count = 0
@@ -116,13 +125,21 @@ class RecoveryService:
             historical_rag_used = True
             retrieved_evidence_count = len(retrieved_cases) if retrieved_cases else 0
 
-        # 3. Evaluate Decision
-        decision: RecoveryDecision = self.decision_engine.evaluate(
-            context=context,
-            historical_cases=retrieved_cases,
-        )
+        # 4. Evaluate Decision bounded by Policy Context & Deterministic Validator
+        try:
+            decision: RecoveryDecision = self.decision_engine.evaluate(
+                context=context,
+                historical_cases=retrieved_cases,
+                policy_context=policy_context,
+            )
+        except TypeError:
+            # Backwards compatibility for external mock engines without policy_context argument
+            decision = self.decision_engine.evaluate(
+                context=context,
+                historical_cases=retrieved_cases,
+            )
 
-        # 4. Atomic Persistence & Audit Logging
+        # 5. Atomic Persistence & Audit Logging
         try:
             # Resolve opportunity directly by UUID
             opp_id = context.current_opportunity.opportunity_id
@@ -154,7 +171,10 @@ class RecoveryService:
             )
             raise
 
-        # 5. Build Clean Client-Facing Response DTO
+        # 6. Build Clean Client-Facing Response DTO with Policy Telemetry
+        applied_policy_ids = [r.policy_id for r in policy_context.applicable_rules]
+        was_overridden = bool(unfrozen_basis.get("policy_overridden", False))
+
         return RecoveryEvaluationResponse(
             payment_id=context.current_payment.payment_id,
             customer_id=context.customer.customer_id,
@@ -165,5 +185,9 @@ class RecoveryService:
             decision_basis=unfrozen_basis,
             historical_rag_used=historical_rag_used,
             retrieved_evidence_count=retrieved_evidence_count,
+            provider=policy_context.provider,
+            policy_version=policy_context.policy_version,
+            applied_policy_ids=applied_policy_ids,
+            policy_overridden=was_overridden,
             evaluated_at=utc_now(),
         )

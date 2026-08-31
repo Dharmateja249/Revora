@@ -20,6 +20,7 @@ from app.historical_retrieval import HistoricalCase
 
 if TYPE_CHECKING:
     from app.hybrid_historical_retriever import HybridHistoricalRetriever
+    from app.policies.schemas import RecoveryPolicyContext
 
 
 def _freeze_nested(value: Any) -> Any:
@@ -265,13 +266,13 @@ class DecisionEngine:
         self.max_attempts = max_attempts
         self.retriever = retriever
 
-    def evaluate(
+    def _evaluate_candidate(
         self,
         context: CustomerRecoveryContext,
         historical_cases: Optional[List[HistoricalCase]] = None,
     ) -> RecoveryDecision:
         """
-        Evaluate context and historical evidence to produce an immutable RecoveryDecision.
+        Evaluate context and historical evidence to produce a candidate RecoveryDecision.
         """
         if not isinstance(context, CustomerRecoveryContext):
             raise TypeError(
@@ -568,15 +569,84 @@ class DecisionEngine:
             decision_basis={**base_basis, "rule_matched": "DefaultFallbackRule"},
         )
 
+    def evaluate(
+        self,
+        context: CustomerRecoveryContext,
+        historical_cases: Optional[List[HistoricalCase]] = None,
+        policy_context: Optional[RecoveryPolicyContext] = None,
+    ) -> RecoveryDecision:
+        """
+        Evaluate context, historical evidence, and policy constraints to produce a final RecoveryDecision.
+
+        If a policy_context is supplied, candidate recommendations are deterministically validated
+        and overridden fail-closed if any policy rules are violated.
+        """
+        candidate_decision = self._evaluate_candidate(
+            context=context,
+            historical_cases=historical_cases,
+        )
+
+        if policy_context is None:
+            return candidate_decision
+
+        from app.policies.validator import PolicyValidator
+
+        validator = PolicyValidator()
+        validation = validator.validate_decision(
+            candidate_action=candidate_decision.recommended_action,
+            policy_context=policy_context,
+        )
+
+        effective_action = validation.effective_action
+        was_overridden = validation.was_overridden
+
+        # Unfreeze or copy decision basis
+        basis_dict = dict(candidate_decision.decision_basis)
+        basis_dict["policy_validation"] = {
+            "is_valid": validation.is_valid,
+            "was_overridden": validation.was_overridden,
+            "applied_policy_ids": list(validation.applied_policy_ids),
+            "violated_policy_ids": list(validation.violated_policy_ids),
+            "explanation": validation.explanation,
+        }
+        basis_dict["applied_policy_ids"] = list(validation.applied_policy_ids)
+        basis_dict["policy_overridden"] = was_overridden
+
+        if was_overridden:
+            basis_dict["original_candidate_action"] = candidate_decision.recommended_action.value
+            basis_dict["violated_policy_ids"] = list(validation.violated_policy_ids)
+            reason = (
+                f"Policy override: {validation.explanation} "
+                f"(Original recommendation '{candidate_decision.recommended_action.value}' was prohibited)."
+            )
+            confidence = (
+                0.95 if effective_action == RecoveryAction.NO_ACTION else min(candidate_decision.confidence, 0.85)
+            )
+        else:
+            reason = candidate_decision.reason
+            confidence = candidate_decision.confidence
+
+        return RecoveryDecision(
+            recommended_action=effective_action,
+            reason=reason,
+            confidence=confidence,
+            decision_basis=basis_dict,
+        )
+
 
 def evaluate_recovery_decision(
     context: CustomerRecoveryContext,
     max_attempts: int = 3,
     retriever: Optional[HybridHistoricalRetriever] = None,
     historical_cases: Optional[List[HistoricalCase]] = None,
+    policy_context: Optional[RecoveryPolicyContext] = None,
 ) -> RecoveryDecision:
     """
-    Public entrypoint for the deterministic recovery decision engine with optional historical RAG.
+    Public entrypoint for the deterministic recovery decision engine with optional historical RAG and policy constraints.
     """
     engine = DecisionEngine(max_attempts=max_attempts, retriever=retriever)
-    return engine.evaluate(context, historical_cases=historical_cases)
+    return engine.evaluate(
+        context,
+        historical_cases=historical_cases,
+        policy_context=policy_context,
+    )

@@ -204,7 +204,7 @@ def test_recovery_service_with_rag_disabled(in_memory_db):
 class MockDecisionEngine(DecisionEngine):
     """Mock decision engine for testing DI."""
 
-    def evaluate(self, context, historical_cases=None):
+    def evaluate(self, context, historical_cases=None, policy_context=None, **kwargs):
         return RecoveryDecision(
             recommended_action=RecoveryAction.WAIT_AND_RETRY,
             reason="Mock decision engine recommendation",

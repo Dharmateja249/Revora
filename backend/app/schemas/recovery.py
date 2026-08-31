@@ -6,7 +6,7 @@ ensuring clean separation from internal ORM entities and protecting customer PII
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -106,6 +106,22 @@ class RecoveryEvaluationResponse(BaseModel):
         default=0,
         ge=0,
         description="Number of historical recovery cases retrieved and evaluated.",
+    )
+    provider: Optional[str] = Field(
+        default=None,
+        description="Payment provider context identifier (e.g., 'razorpay').",
+    )
+    policy_version: Optional[str] = Field(
+        default=None,
+        description="Version identifier of the applied recovery policy rules.",
+    )
+    applied_policy_ids: List[str] = Field(
+        default_factory=list,
+        description="Identifiers of policy rules applied during decision evaluation.",
+    )
+    policy_overridden: bool = Field(
+        default=False,
+        description="Flag indicating if the candidate action was overridden by policy validation.",
     )
     evaluated_at: datetime = Field(
         default_factory=utc_now,
