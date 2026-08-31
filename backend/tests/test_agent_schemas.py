@@ -2,7 +2,7 @@
 Unit tests for Revora Adaptive Recovery Agent Schemas.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import pytest
 from pydantic import ValidationError
 
@@ -290,3 +290,164 @@ def test_agent_decision_result_immutability():
 
     with pytest.raises(ValidationError):
         result.agent_used = False
+
+
+def test_agent_decision_result_rejects_agent_used_fallback():
+    """Verify that agent_used=True with is_fallback=True raises ValidationError."""
+    rec = LLMRecoveryRecommendation(
+        recommended_action=RecoveryAction.PAYMENT_LINK,
+        confidence=0.8,
+        reasoning="Reason.",
+    )
+
+    with pytest.raises(ValidationError, match="agent_used cannot be True when is_fallback is True"):
+        AgentDecisionResult(
+            recommendation=rec,
+            agent_used=True,
+            is_fallback=True,
+            fallback_reason="Some error",
+        )
+
+
+def test_agent_decision_result_rejects_fallback_without_reason():
+    """Verify that is_fallback=True with empty/missing fallback_reason raises ValidationError."""
+    rec = LLMRecoveryRecommendation(
+        recommended_action=RecoveryAction.WAIT_AND_RETRY,
+        confidence=0.5,
+        reasoning="Reason.",
+    )
+
+    with pytest.raises(ValidationError, match="fallback_reason is required and cannot be empty"):
+        AgentDecisionResult(
+            recommendation=rec,
+            agent_used=False,
+            is_fallback=True,
+            fallback_reason=None,
+        )
+
+    with pytest.raises(ValidationError, match="fallback_reason is required and cannot be empty"):
+        AgentDecisionResult(
+            recommendation=rec,
+            agent_used=False,
+            is_fallback=True,
+            fallback_reason="   \t  ",
+        )
+
+
+def test_agent_decision_result_rejects_inconsistent_non_fallback_without_agent():
+    """Verify that agent_used=False with is_fallback=False raises ValidationError."""
+    rec = LLMRecoveryRecommendation(
+        recommended_action=RecoveryAction.PAYMENT_LINK,
+        confidence=0.8,
+        reasoning="Reason.",
+    )
+
+    with pytest.raises(ValidationError, match="agent_used must be True when is_fallback is False"):
+        AgentDecisionResult(
+            recommendation=rec,
+            agent_used=False,
+            is_fallback=False,
+        )
+
+
+def test_agent_decision_result_accepts_valid_llm_result():
+    """Verify standard valid LLM result state (agent_used=True, is_fallback=False)."""
+    rec = LLMRecoveryRecommendation(
+        recommended_action=RecoveryAction.PAYMENT_LINK,
+        confidence=0.9,
+        reasoning="Valid LLM generated reasoning.",
+    )
+
+    result = AgentDecisionResult(
+        recommendation=rec,
+        agent_used=True,
+        is_fallback=False,
+        provider="mock_llm",
+        model_name="test-model",
+    )
+
+    assert result.agent_used is True
+    assert result.is_fallback is False
+    assert result.fallback_reason is None
+
+
+def test_agent_decision_result_accepts_valid_fallback_result():
+    """Verify standard valid fallback result state (agent_used=False, is_fallback=True, with reason)."""
+    rec = LLMRecoveryRecommendation(
+        recommended_action=RecoveryAction.WAIT_AND_RETRY,
+        confidence=0.5,
+        reasoning="Deterministic fallback rule applied.",
+    )
+
+    result = AgentDecisionResult(
+        recommendation=rec,
+        agent_used=False,
+        is_fallback=True,
+        fallback_reason="LLM provider timed out after 2000ms",
+        provider="deterministic_engine",
+    )
+
+    assert result.agent_used is False
+    assert result.is_fallback is True
+    assert result.fallback_reason == "LLM provider timed out after 2000ms"
+
+
+def test_agent_decision_result_rejects_naive_evaluated_at():
+    """Verify that a naive datetime (without timezone info) raises ValidationError."""
+    rec = LLMRecoveryRecommendation(
+        recommended_action=RecoveryAction.PAYMENT_LINK,
+        confidence=0.85,
+        reasoning="Reason.",
+    )
+
+    naive_dt = datetime(2026, 8, 31, 10, 30, 0)  # No tzinfo
+
+    with pytest.raises(ValidationError, match="evaluated_at must be a timezone-aware datetime"):
+        AgentDecisionResult(
+            recommendation=rec,
+            agent_used=True,
+            evaluated_at=naive_dt,
+        )
+
+
+def test_agent_decision_result_normalizes_non_utc_evaluated_at():
+    """Verify that a timezone-aware non-UTC datetime is converted to timezone.utc."""
+    rec = LLMRecoveryRecommendation(
+        recommended_action=RecoveryAction.PAYMENT_LINK,
+        confidence=0.85,
+        reasoning="Reason.",
+    )
+
+    # IST timezone (+05:30)
+    ist_tz = timezone(timedelta(hours=5, minutes=30))
+    ist_dt = datetime(2026, 8, 31, 15, 30, 0, tzinfo=ist_tz)
+
+    result = AgentDecisionResult(
+        recommendation=rec,
+        agent_used=True,
+        evaluated_at=ist_dt,
+    )
+
+    # Expected equivalent UTC: 2026-08-31 10:00:00 UTC
+    assert result.evaluated_at.tzinfo == timezone.utc
+    assert result.evaluated_at.hour == 10
+    assert result.evaluated_at.minute == 0
+    assert result.evaluated_at.year == 2026
+    assert result.evaluated_at.month == 8
+    assert result.evaluated_at.day == 31
+
+
+def test_agent_decision_result_default_evaluated_at_is_utc():
+    """Verify default factory evaluates to timezone.utc datetime."""
+    rec = LLMRecoveryRecommendation(
+        recommended_action=RecoveryAction.PAYMENT_LINK,
+        confidence=0.85,
+        reasoning="Reason.",
+    )
+
+    result = AgentDecisionResult(
+        recommendation=rec,
+        agent_used=True,
+    )
+
+    assert result.evaluated_at.tzinfo == timezone.utc

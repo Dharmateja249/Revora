@@ -273,6 +273,13 @@ class AgentDecisionResult(BaseModel):
         clean = str(v).strip()
         return clean if clean else None
 
+    @field_validator("evaluated_at", mode="after")
+    @classmethod
+    def _ensure_utc_evaluated_at(cls, v: datetime) -> datetime:
+        if v.tzinfo is None or v.tzinfo.utcoffset(v) is None:
+            raise ValueError("evaluated_at must be a timezone-aware datetime.")
+        return v.astimezone(timezone.utc)
+
     @field_validator("metadata", mode="before")
     @classmethod
     def _normalize_metadata(cls, v: Any) -> Any:
@@ -286,3 +293,19 @@ class AgentDecisionResult(BaseModel):
     @field_serializer("metadata")
     def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> Dict[str, Any]:
         return _unfreeze_for_serialization(v)
+
+    @model_validator(mode="after")
+    def _validate_fallback_state_consistency(self) -> "AgentDecisionResult":
+        if self.agent_used and self.is_fallback:
+            raise ValueError(
+                "Inconsistent state: agent_used cannot be True when is_fallback is True."
+            )
+        if self.is_fallback and not self.fallback_reason:
+            raise ValueError(
+                "Inconsistent state: fallback_reason is required and cannot be empty when is_fallback is True."
+            )
+        if not self.is_fallback and not self.agent_used:
+            raise ValueError(
+                "Inconsistent state: agent_used must be True when is_fallback is False."
+            )
+        return self
