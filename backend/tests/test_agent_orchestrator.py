@@ -653,11 +653,16 @@ async def test_provider_failure_sanitizes_fake_sensitive_exception_string(
     valid_llm_recommendation,
 ):
     """Regression test for Finding 2: raw sensitive provider exception strings are never exposed."""
-    secret_leak_message = "CRITICAL_LEAK: api_key=sk_live_secret123 token=abc_secret customer_cc=4111222233334444"
+    sensitive_markers = (
+        "provider-test-api-marker",
+        "provider-test-token-marker",
+        "provider-test-card-marker",
+    )
+    provider_error_message = f"CRITICAL_LEAK: {' '.join(sensitive_markers)}"
     provider = MockLLMProvider(
         recommendation=valid_llm_recommendation,
         should_fail=True,
-        failure_exception=LLMProviderError(secret_leak_message),
+        failure_exception=LLMProviderError(provider_error_message),
     )
     orchestrator = AgentOrchestrator(provider=provider)
 
@@ -671,12 +676,12 @@ async def test_provider_failure_sanitizes_fake_sensitive_exception_string(
 
     # Asserts sensitive text is NOT leaked
     assert "CRITICAL_LEAK" not in json_str
-    assert "sk_live_secret123" not in json_str
-    assert "abc_secret" not in json_str
-    assert "4111222233334444" not in json_str
+    for marker in sensitive_markers:
+        assert marker not in json_str
 
     # Asserts fixed sanitized strings and safe diagnostic metadata
     assert result.fallback_reason == "LLM provider failure; deterministic fallback applied"
     assert result.recommendation.reasoning == "Deterministic fallback triggered due to LLM provider failure."
     assert result.metadata["error_type"] == "LLMProviderError"
+
 
