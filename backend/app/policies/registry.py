@@ -5,8 +5,6 @@ Defines deterministic, versioned policy rules across Safety invariants, verified
 Provider constraints, and Revora Business rules.
 """
 
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
-
 from app.decision_engine import RecoveryAction
 from app.policies.schemas import PolicyRule, PolicyType
 
@@ -241,7 +239,7 @@ class PolicyRegistry:
 
     def __init__(self, version: str = DEFAULT_POLICY_VERSION):
         self.version = version
-        self._rules: Dict[str, PolicyRule] = {}
+        self._rules: dict[str, PolicyRule] = {}
         self._register_defaults()
 
     def _register_defaults(self) -> None:
@@ -265,17 +263,17 @@ class PolicyRegistry:
             raise TypeError(f"Expected PolicyRule, got {type(rule).__name__}")
         self._rules[rule.policy_id] = rule
 
-    def get_rule(self, policy_id: str) -> Optional[PolicyRule]:
+    def get_rule(self, policy_id: str) -> PolicyRule | None:
         """Retrieve a rule by its policy_id."""
         return self._rules.get(policy_id)
 
-    def list_rules(self) -> Tuple[PolicyRule, ...]:
+    def list_rules(self) -> tuple[PolicyRule, ...]:
         """Return all registered policy rules sorted by priority descending."""
         return tuple(sorted(self._rules.values(), key=lambda r: -r.priority))
 
 
 # Global default registry instance
-_default_registry: Optional[PolicyRegistry] = None
+_default_registry: PolicyRegistry | None = None
 
 
 def get_policy_registry() -> PolicyRegistry:

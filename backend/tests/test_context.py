@@ -9,26 +9,25 @@ Verifies:
 - Proper raising and identification of domain exceptions
 """
 
-from datetime import datetime, timezone
 import uuid
-import pytest
-from pydantic import ValidationError
+from datetime import datetime, timezone
 
+import pytest
 from app.context import (
-    CustomerContext,
-    PaymentContext,
-    RecoveryOpportunityContext,
-    RecoveryAttemptContext,
-    HistoricalPaymentContext,
-    CustomerRecoveryStatsContext,
-    CustomerRecoveryContext,
     ContextRetrievalError,
+    CustomerContext,
     CustomerNotFoundError,
-    PaymentNotFoundError,
+    CustomerRecoveryContext,
+    CustomerRecoveryStatsContext,
+    HistoricalPaymentContext,
+    PaymentContext,
     PaymentCustomerMismatchError,
+    PaymentNotFoundError,
+    RecoveryAttemptContext,
+    RecoveryOpportunityContext,
     RecoveryOpportunityNotFoundError,
 )
-
+from pydantic import ValidationError
 
 # ============================================================================
 # Domain Exceptions Tests
@@ -191,7 +190,10 @@ def test_valid_customer_recovery_context_construction():
     assert len(context.historical_payments) == 1
     assert context.historical_payments[0].was_recovered is True
     assert context.recovery_statistics.recovery_rate == 0.5
-    assert "customer_prompt_upi" in context.recovery_statistics.previously_successful_actions
+    assert (
+        "customer_prompt_upi"
+        in context.recovery_statistics.previously_successful_actions
+    )
 
 
 def test_cold_start_new_customer_context():

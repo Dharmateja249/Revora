@@ -19,10 +19,10 @@ Tests:
 15. End-to-end pipeline integration test
 """
 
-from datetime import datetime, timezone, timedelta
 import uuid
-import pytest
+from datetime import datetime, timedelta, timezone
 
+import pytest
 from app.context import (
     CustomerContext,
     CustomerRecoveryContext,
@@ -31,7 +31,6 @@ from app.context import (
 )
 from app.embedding_service import (
     DeterministicLocalEmbeddingProvider,
-    EmbeddingProvider,
     EmbeddingService,
     get_embedding_service,
 )
@@ -45,7 +44,6 @@ from app.semantic_historical_retriever import (
     construct_canonical_query_text,
 )
 from app.vector_index import VectorIndex
-
 
 # ============================================================================
 # 1. Canonical Query Representation
@@ -284,13 +282,19 @@ def test_missing_or_malformed_customer_id_fails_closed():
         text="failure_reason: insufficient_funds\npayment_method: card\namount: 1000.00\ncurrency: INR\nrecovery_action: none\nrecovery_status: failed\nwas_recovered: false\namount_recovered: 0.00",
         metadata={"customer_id": "not-a-valid-uuid", "amount": 1000.0},
     )
-    vector_index.add(doc_malformed_cust, embedding_service.embed(doc_malformed_cust.text))
+    vector_index.add(
+        doc_malformed_cust, embedding_service.embed(doc_malformed_cust.text)
+    )
 
     # Document 3: Valid matching customer_id
     doc_valid = RetrievalDocument(
         case_id=uuid.uuid4(),
         text="failure_reason: insufficient_funds\npayment_method: card\namount: 1000.00\ncurrency: INR\nrecovery_action: none\nrecovery_status: recovered\nwas_recovered: true\namount_recovered: 1000.00",
-        metadata={"customer_id": str(valid_cid), "amount": 1000.0, "was_recovered": True},
+        metadata={
+            "customer_id": str(valid_cid),
+            "amount": 1000.0,
+            "was_recovered": True,
+        },
     )
     vector_index.add(doc_valid, embedding_service.embed(doc_valid.text))
 
@@ -331,43 +335,71 @@ def test_timestamp_comparisons_and_timezone_safety():
     doc_past_naive = RetrievalDocument(
         case_id=uuid.uuid4(),
         text="failure_reason: timeout\npayment_method: card\namount: 100.00\ncurrency: INR\nrecovery_action: retry\nrecovery_status: recovered\nwas_recovered: true\namount_recovered: 100.00",
-        metadata={"customer_id": str(customer_id), "created_at": "2026-01-15T10:00:00", "was_recovered": True},
+        metadata={
+            "customer_id": str(customer_id),
+            "created_at": "2026-01-15T10:00:00",
+            "was_recovered": True,
+        },
     )
     # Historical Case 2: Aware timestamp in past (should succeed)
     doc_past_aware = RetrievalDocument(
         case_id=uuid.uuid4(),
         text="failure_reason: timeout\npayment_method: card\namount: 100.00\ncurrency: INR\nrecovery_action: retry\nrecovery_status: recovered\nwas_recovered: true\namount_recovered: 100.00",
-        metadata={"customer_id": str(customer_id), "created_at": "2026-01-20T10:00:00+00:00", "was_recovered": True},
+        metadata={
+            "customer_id": str(customer_id),
+            "created_at": "2026-01-20T10:00:00+00:00",
+            "was_recovered": True,
+        },
     )
     # Historical Case 3: Valid ISO string with 'Z' suffix in past (should succeed)
     doc_past_z = RetrievalDocument(
         case_id=uuid.uuid4(),
         text="failure_reason: timeout\npayment_method: card\namount: 100.00\ncurrency: INR\nrecovery_action: retry\nrecovery_status: recovered\nwas_recovered: true\namount_recovered: 100.00",
-        metadata={"customer_id": str(customer_id), "created_at": "2026-01-25T10:00:00Z", "was_recovered": True},
+        metadata={
+            "customer_id": str(customer_id),
+            "created_at": "2026-01-25T10:00:00Z",
+            "was_recovered": True,
+        },
     )
     # Historical Case 4: Timestamp equal to current payment (should succeed)
     doc_equal_curr = RetrievalDocument(
         case_id=uuid.uuid4(),
         text="failure_reason: timeout\npayment_method: card\namount: 100.00\ncurrency: INR\nrecovery_action: retry\nrecovery_status: recovered\nwas_recovered: true\namount_recovered: 100.00",
-        metadata={"customer_id": str(customer_id), "created_at": "2026-02-01T12:00:00Z", "was_recovered": True},
+        metadata={
+            "customer_id": str(customer_id),
+            "created_at": "2026-02-01T12:00:00Z",
+            "was_recovered": True,
+        },
     )
     # Historical Case 5: Future timestamp (should be excluded)
     doc_future = RetrievalDocument(
         case_id=uuid.uuid4(),
         text="failure_reason: timeout\npayment_method: card\namount: 100.00\ncurrency: INR\nrecovery_action: retry\nrecovery_status: recovered\nwas_recovered: true\namount_recovered: 100.00",
-        metadata={"customer_id": str(customer_id), "created_at": "2026-03-01T10:00:00+00:00", "was_recovered": True},
+        metadata={
+            "customer_id": str(customer_id),
+            "created_at": "2026-03-01T10:00:00+00:00",
+            "was_recovered": True,
+        },
     )
     # Historical Case 6: Future timestamp with 'Z' suffix (should be excluded)
     doc_future_z = RetrievalDocument(
         case_id=uuid.uuid4(),
         text="failure_reason: timeout\npayment_method: card\namount: 100.00\ncurrency: INR\nrecovery_action: retry\nrecovery_status: recovered\nwas_recovered: true\namount_recovered: 100.00",
-        metadata={"customer_id": str(customer_id), "created_at": "2026-03-05T10:00:00Z", "was_recovered": True},
+        metadata={
+            "customer_id": str(customer_id),
+            "created_at": "2026-03-05T10:00:00Z",
+            "was_recovered": True,
+        },
     )
     # Historical Case 7: Malformed timestamp (fail closed: should be excluded)
     doc_malformed_time = RetrievalDocument(
         case_id=uuid.uuid4(),
         text="failure_reason: timeout\npayment_method: card\namount: 100.00\ncurrency: INR\nrecovery_action: retry\nrecovery_status: recovered\nwas_recovered: true\namount_recovered: 100.00",
-        metadata={"customer_id": str(customer_id), "created_at": "not-a-datetime", "was_recovered": True},
+        metadata={
+            "customer_id": str(customer_id),
+            "created_at": "not-a-datetime",
+            "was_recovered": True,
+        },
     )
     # Historical Case 8: Missing created_at (fail closed: should be excluded when current payment has timestamp)
     doc_missing_time = RetrievalDocument(
@@ -440,11 +472,15 @@ def test_normalize_datetime_helper():
     assert dt_offset == datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
 
     # Naive datetime object -> UTC aware
-    dt_naive = datetime(2026, 1, 1, 10, 0, 0)
-    assert _normalize_datetime(dt_naive) == datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+    dt_naive = datetime(2026, 1, 1, 10, 0, 0)  # noqa: DTZ001 -- intentionally naive to test UTC normalization
+    assert _normalize_datetime(dt_naive) == datetime(
+        2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc
+    )
 
     # Aware datetime object -> UTC converted
-    assert _normalize_datetime(dt_z) == datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+    assert _normalize_datetime(dt_z) == datetime(
+        2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc
+    )
 
     # Invalid / empty / unsupported types return None without raising
     assert _normalize_datetime(None) is None
@@ -545,10 +581,14 @@ def test_dependency_injection_type_validation():
     index = VectorIndex()
 
     with pytest.raises(TypeError):
-        SemanticHistoricalRetriever(vector_index="not_an_index", embedding_service=service)  # type: ignore
+        SemanticHistoricalRetriever(
+            vector_index="not_an_index", embedding_service=service
+        )  # type: ignore
 
     with pytest.raises(TypeError):
-        SemanticHistoricalRetriever(vector_index=index, embedding_service="not_a_service")  # type: ignore
+        SemanticHistoricalRetriever(
+            vector_index=index, embedding_service="not_a_service"
+        )  # type: ignore
 
 
 # ============================================================================

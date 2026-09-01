@@ -6,9 +6,14 @@ computing precision@K, recall@K, MRR, NDCG@K, and latency, and compiling aggrega
 benchmark reports.
 """
 
-from datetime import datetime, timezone
 import time
-from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple, Union, runtime_checkable
+from collections.abc import Sequence
+from datetime import datetime, timezone
+from typing import (
+    Any,
+    Protocol,
+    runtime_checkable,
+)
 from uuid import UUID
 
 from app.context import CustomerRecoveryContext
@@ -37,24 +42,29 @@ class RetrieverProtocol(Protocol):
         self,
         context: CustomerRecoveryContext,
         top_k: int,
-    ) -> Sequence[HistoricalCase]:
-        ...
+    ) -> Sequence[HistoricalCase]: ...
 
 
-def _validate_k_values(k_values: Sequence[int]) -> Tuple[int, ...]:
+def _validate_k_values(k_values: Sequence[int]) -> tuple[int, ...]:
     """Validate and normalize benchmark depth values (k_values)."""
     if not isinstance(k_values, (list, tuple, set)):
-        raise TypeError(f"k_values must be a sequence of positive integers, got {type(k_values).__name__}")
+        raise TypeError(
+            f"k_values must be a sequence of positive integers, got {type(k_values).__name__}"
+        )
     if not k_values:
         raise ValueError("k_values sequence cannot be empty.")
 
-    normalized: List[int] = []
+    normalized: list[int] = []
     seen: set[int] = set()
     for idx, item in enumerate(k_values):
         if isinstance(item, bool) or not isinstance(item, int):
-            raise TypeError(f"Item at index {idx} in k_values must be an integer, got {type(item).__name__}")
+            raise TypeError(
+                f"Item at index {idx} in k_values must be an integer, got {type(item).__name__}"
+            )
         if item <= 0:
-            raise ValueError(f"Item at index {idx} in k_values must be positive (> 0), got {item}")
+            raise ValueError(
+                f"Item at index {idx} in k_values must be positive (> 0), got {item}"
+            )
         if item in seen:
             raise ValueError(f"Duplicate K value {item} found in k_values.")
         seen.add(item)
@@ -84,9 +94,11 @@ class RetrievalEvaluator:
                 )
 
         if not isinstance(dataset_name, str) or not dataset_name.strip():
-            raise ValueError(f"dataset_name must be a non-empty string, got: {dataset_name!r}")
+            raise ValueError(
+                f"dataset_name must be a non-empty string, got: {dataset_name!r}"
+            )
 
-        self.evaluation_cases: Tuple[EvaluationCase, ...] = tuple(evaluation_cases)
+        self.evaluation_cases: tuple[EvaluationCase, ...] = tuple(evaluation_cases)
         self.dataset_name: str = dataset_name.strip()
 
     def _invoke_retriever(
@@ -99,7 +111,9 @@ class RetrievalEvaluator:
         Invoke the retriever using its supported interface (retrieve_relevant_cases, retrieve, or __call__).
         Preserves original exceptions without suppressing them.
         """
-        if hasattr(retriever, "retrieve_relevant_cases") and callable(retriever.retrieve_relevant_cases):
+        if hasattr(retriever, "retrieve_relevant_cases") and callable(
+            retriever.retrieve_relevant_cases
+        ):
             results = retriever.retrieve_relevant_cases(context=context, top_k=top_k)
         elif hasattr(retriever, "retrieve") and callable(retriever.retrieve):
             results = retriever.retrieve(context=context, top_k=top_k)
@@ -142,16 +156,18 @@ class RetrievalEvaluator:
             RetrieverBenchmarkReport aggregating query-level and summary metrics.
         """
         if not isinstance(retriever_name, str) or not retriever_name.strip():
-            raise ValueError(f"retriever_name must be a non-empty string, got: {retriever_name!r}")
+            raise ValueError(
+                f"retriever_name must be a non-empty string, got: {retriever_name!r}"
+            )
         clean_retriever_name = retriever_name.strip()
 
         valid_k_values = _validate_k_values(k_values)
         max_k = max(valid_k_values)
 
-        all_results: List[RetrievalEvalResult] = []
-        per_query_latencies: List[float] = []
-        per_query_mrrs: List[float] = []
-        metrics_by_k: Dict[int, Dict[str, List[float]]] = {
+        all_results: list[RetrievalEvalResult] = []
+        per_query_latencies: list[float] = []
+        per_query_mrrs: list[float] = []
+        metrics_by_k: dict[int, dict[str, list[float]]] = {
             k: {"precision": [], "recall": [], "ndcg": []} for k in valid_k_values
         }
 
@@ -217,21 +233,29 @@ class RetrievalEvaluator:
                 all_results.append(eval_result)
 
         # 5. Compute Aggregate Summary Metrics
-        aggregate_metrics: Dict[str, float] = {}
+        aggregate_metrics: dict[str, float] = {}
         num_queries = len(self.evaluation_cases)
 
         if num_queries > 0:
             aggregate_metrics["mrr"] = float(sum(per_query_mrrs) / num_queries)
-            aggregate_metrics["mean_latency_ms"] = float(sum(per_query_latencies) / num_queries)
+            aggregate_metrics["mean_latency_ms"] = float(
+                sum(per_query_latencies) / num_queries
+            )
 
             for k in valid_k_values:
                 prec_list = metrics_by_k[k]["precision"]
                 rec_list = metrics_by_k[k]["recall"]
                 ndcg_list = metrics_by_k[k]["ndcg"]
 
-                aggregate_metrics[f"mean_precision_at_{k}"] = float(sum(prec_list) / num_queries)
-                aggregate_metrics[f"mean_recall_at_{k}"] = float(sum(rec_list) / num_queries)
-                aggregate_metrics[f"mean_ndcg_at_{k}"] = float(sum(ndcg_list) / num_queries)
+                aggregate_metrics[f"mean_precision_at_{k}"] = float(
+                    sum(prec_list) / num_queries
+                )
+                aggregate_metrics[f"mean_recall_at_{k}"] = float(
+                    sum(rec_list) / num_queries
+                )
+                aggregate_metrics[f"mean_ndcg_at_{k}"] = float(
+                    sum(ndcg_list) / num_queries
+                )
         else:
             aggregate_metrics["mrr"] = 0.0
             aggregate_metrics["mean_latency_ms"] = 0.0

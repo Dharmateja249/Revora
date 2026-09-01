@@ -14,38 +14,32 @@ Verifies:
 10. Default deterministic execution preserves existing behavior identically.
 """
 
-from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
 import uuid
-import pytest
-from sqlalchemy import create_engine, select
-from sqlalchemy.pool import StaticPool
-from sqlalchemy.orm import sessionmaker
+from datetime import timedelta
 
+import pytest
 from app.agent.orchestrator import AgentOrchestrator
 from app.agent.provider import LLMProviderError, MockLLMProvider
 from app.agent.schemas import LLMRecoveryRecommendation
-from app.context import (
-    CustomerNotFoundError,
-    PaymentCustomerMismatchError,
-    PaymentNotFoundError,
-    RecoveryOpportunityNotFoundError,
-)
 from app.database import Base
-from app.decision_engine import DecisionEngine, RecoveryAction, RecoveryDecision
-from app.embedding_service import get_embedding_service
+from app.decision_engine import RecoveryAction, RecoveryDecision
 from app.historical_retrieval import HistoricalCase
-from app.hybrid_historical_retriever import HybridHistoricalRetriever
-from app.models import AuditEvent, Customer, Payment, RecoveryAttempt, RecoveryOpportunity, utc_now
+from app.models import (
+    AuditEvent,
+    Customer,
+    Payment,
+    RecoveryAttempt,
+    RecoveryOpportunity,
+    utc_now,
+)
 from app.policies.schemas import RecoveryPolicyContext
 from app.recovery_service import RecoveryService
 from app.schemas.recovery import (
     RecoveryEvaluationRequest,
-    RecoveryEvaluationResponse,
 )
-from app.semantic_historical_retriever import SemanticHistoricalRetriever
-from app.vector_index import VectorIndex
-
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 # ============================================================================
 # Fixtures
@@ -68,7 +62,6 @@ def in_memory_db():
     finally:
         session.close()
         Base.metadata.drop_all(engine)
-
 
 
 def _seed_customer_payment_opportunity(
@@ -126,7 +119,7 @@ def _seed_customer_payment_opportunity(
 
 def test_service_default_uses_deterministic_engine(in_memory_db):
     """1. Verify default service instantiation uses deterministic engine with agent disabled."""
-    cust_id, pay_id, opp_id = _seed_customer_payment_opportunity(in_memory_db)
+    cust_id, pay_id, _opp_id = _seed_customer_payment_opportunity(in_memory_db)
     service = RecoveryService()
 
     assert service.use_agent is False
@@ -186,7 +179,10 @@ async def test_service_with_agent_enabled_uses_orchestrator(in_memory_db):
     assert resp.confidence == 0.88
     assert resp.reason == "High probability recovery via personalized payment link."
     assert resp.decision_basis["agent_used"] is True
-    assert resp.decision_basis["key_factors"] == ["customer_affinity", "transient_timeout"]
+    assert resp.decision_basis["key_factors"] == [
+        "customer_affinity",
+        "transient_timeout",
+    ]
 
     # Verify DB opportunity update
     opp = in_memory_db.get(RecoveryOpportunity, opp_id)
@@ -197,7 +193,7 @@ async def test_service_with_agent_enabled_uses_orchestrator(in_memory_db):
 
 def test_service_request_level_agent_toggle(in_memory_db):
     """3. Verify request-level use_agent toggle overrides service defaults in all 3 cases."""
-    cust_id, pay_id, opp_id = _seed_customer_payment_opportunity(in_memory_db)
+    cust_id, pay_id, _opp_id = _seed_customer_payment_opportunity(in_memory_db)
 
     rec = LLMRecoveryRecommendation(
         recommended_action=RecoveryAction.CHANGE_PAYMENT_METHOD,
@@ -211,21 +207,33 @@ def test_service_request_level_agent_toggle(in_memory_db):
 
     # Case A: service=False + request=True -> Agent path
     service_disabled = RecoveryService(agent_orchestrator=orchestrator, use_agent=False)
-    req_enable = RecoveryEvaluationRequest(customer_id=cust_id, payment_id=pay_id, use_rag=False, use_agent=True)
-    resp_a = service_disabled.evaluate_recovery(db_session=in_memory_db, request=req_enable)
+    req_enable = RecoveryEvaluationRequest(
+        customer_id=cust_id, payment_id=pay_id, use_rag=False, use_agent=True
+    )
+    resp_a = service_disabled.evaluate_recovery(
+        db_session=in_memory_db, request=req_enable
+    )
     assert resp_a.agent_used is True
     assert resp_a.recommended_action == RecoveryAction.CHANGE_PAYMENT_METHOD
 
     # Case B: service=True + request=False -> Deterministic path
     service_enabled = RecoveryService(agent_orchestrator=orchestrator, use_agent=True)
-    req_disable = RecoveryEvaluationRequest(customer_id=cust_id, payment_id=pay_id, use_rag=False, use_agent=False)
-    resp_b = service_enabled.evaluate_recovery(db_session=in_memory_db, request=req_disable)
+    req_disable = RecoveryEvaluationRequest(
+        customer_id=cust_id, payment_id=pay_id, use_rag=False, use_agent=False
+    )
+    resp_b = service_enabled.evaluate_recovery(
+        db_session=in_memory_db, request=req_disable
+    )
     assert resp_b.agent_used is False
     assert resp_b.is_fallback is False
 
     # Case C: service=True + request=None -> Agent path
-    req_default = RecoveryEvaluationRequest(customer_id=cust_id, payment_id=pay_id, use_rag=False, use_agent=None)
-    resp_c = service_enabled.evaluate_recovery(db_session=in_memory_db, request=req_default)
+    req_default = RecoveryEvaluationRequest(
+        customer_id=cust_id, payment_id=pay_id, use_rag=False, use_agent=None
+    )
+    resp_c = service_enabled.evaluate_recovery(
+        db_session=in_memory_db, request=req_default
+    )
     assert resp_c.agent_used is True
     assert resp_c.recommended_action == RecoveryAction.CHANGE_PAYMENT_METHOD
 
@@ -250,7 +258,9 @@ async def test_service_agent_policy_override_telemetry(in_memory_db):
     orchestrator = AgentOrchestrator(provider=provider)
     service = RecoveryService(agent_orchestrator=orchestrator, use_agent=True)
 
-    req = RecoveryEvaluationRequest(customer_id=cust_id, payment_id=pay_id, use_rag=False)
+    req = RecoveryEvaluationRequest(
+        customer_id=cust_id, payment_id=pay_id, use_rag=False
+    )
     resp = await service.evaluate_recovery_async(db_session=in_memory_db, request=req)
 
     # Policy validator inside orchestrator must have overridden prohibited RETRY_PAYMENT
@@ -291,12 +301,16 @@ def test_service_agent_provider_failure_applies_sanitized_fallback(in_memory_db)
     orchestrator = AgentOrchestrator(provider=provider)
     service = RecoveryService(agent_orchestrator=orchestrator, use_agent=True)
 
-    req = RecoveryEvaluationRequest(customer_id=cust_id, payment_id=pay_id, use_rag=False)
+    req = RecoveryEvaluationRequest(
+        customer_id=cust_id, payment_id=pay_id, use_rag=False
+    )
     resp = service.evaluate_recovery(db_session=in_memory_db, request=req)
 
     assert resp.agent_used is False
     assert resp.is_fallback is True
-    assert resp.fallback_reason == "LLM provider failure; deterministic fallback applied"
+    assert (
+        resp.fallback_reason == "LLM provider failure; deterministic fallback applied"
+    )
     assert resp.decision_basis["error_type"] == "LLMProviderError"
 
     # Verify sensitive markers are strictly absent from serialized response and audit event
@@ -320,7 +334,7 @@ async def test_service_unexpected_agent_exception_falls_back_to_deterministic_en
     in_memory_db, monkeypatch
 ):
     """6. Verify unexpected agent exceptions trigger service-level fallback to DecisionEngine."""
-    cust_id, pay_id, opp_id = _seed_customer_payment_opportunity(in_memory_db)
+    cust_id, pay_id, _opp_id = _seed_customer_payment_opportunity(in_memory_db)
 
     dummy_rec = LLMRecoveryRecommendation(
         recommended_action=RecoveryAction.PAYMENT_LINK,
@@ -338,13 +352,18 @@ async def test_service_unexpected_agent_exception_falls_back_to_deterministic_en
     monkeypatch.setattr(orchestrator, "decide", _failing_decide)
 
     service = RecoveryService(agent_orchestrator=orchestrator, use_agent=True)
-    req = RecoveryEvaluationRequest(customer_id=cust_id, payment_id=pay_id, use_rag=False)
+    req = RecoveryEvaluationRequest(
+        customer_id=cust_id, payment_id=pay_id, use_rag=False
+    )
 
     resp = await service.evaluate_recovery_async(db_session=in_memory_db, request=req)
 
     assert resp.agent_used is False
     assert resp.is_fallback is True
-    assert resp.fallback_reason == "Unexpected agent orchestration failure; deterministic fallback applied"
+    assert (
+        resp.fallback_reason
+        == "Unexpected agent orchestration failure; deterministic fallback applied"
+    )
     assert resp.decision_basis["error_type"] == "RuntimeError"
 
     # Confirm raw error message is not leaked in response
@@ -366,7 +385,9 @@ def test_service_audit_event_contains_sanitized_agent_telemetry(in_memory_db):
     orchestrator = AgentOrchestrator(provider=provider)
     service = RecoveryService(agent_orchestrator=orchestrator, use_agent=True)
 
-    req = RecoveryEvaluationRequest(customer_id=cust_id, payment_id=pay_id, use_rag=False)
+    req = RecoveryEvaluationRequest(
+        customer_id=cust_id, payment_id=pay_id, use_rag=False
+    )
     service.evaluate_recovery(db_session=in_memory_db, request=req)
 
     stmt = select(AuditEvent).where(AuditEvent.opportunity_id == opp_id)
@@ -384,7 +405,7 @@ def test_service_audit_event_contains_sanitized_agent_telemetry(in_memory_db):
 @pytest.mark.anyio
 async def test_agent_path_preserves_rag_evidence(in_memory_db, monkeypatch):
     """8. Verify historical cases retrieved via RAG are passed intact to AgentOrchestrator."""
-    cust_id, pay_id, opp_id = _seed_customer_payment_opportunity(in_memory_db)
+    cust_id, pay_id, _opp_id = _seed_customer_payment_opportunity(in_memory_db)
 
     captured_cases = None
 
@@ -431,7 +452,9 @@ async def test_agent_path_preserves_rag_evidence(in_memory_db, monkeypatch):
         use_agent=True,
     )
 
-    req = RecoveryEvaluationRequest(customer_id=cust_id, payment_id=pay_id, use_rag=True)
+    req = RecoveryEvaluationRequest(
+        customer_id=cust_id, payment_id=pay_id, use_rag=True
+    )
     resp = await service.evaluate_recovery_async(db_session=in_memory_db, request=req)
 
     assert resp.historical_rag_used is True
@@ -444,7 +467,7 @@ async def test_agent_path_preserves_rag_evidence(in_memory_db, monkeypatch):
 @pytest.mark.anyio
 async def test_agent_path_preserves_policy_context(in_memory_db, monkeypatch):
     """9. Verify resolved RecoveryPolicyContext is passed unchanged to AgentOrchestrator."""
-    cust_id, pay_id, opp_id = _seed_customer_payment_opportunity(in_memory_db)
+    cust_id, pay_id, _opp_id = _seed_customer_payment_opportunity(in_memory_db)
 
     captured_policy = None
 
@@ -467,7 +490,9 @@ async def test_agent_path_preserves_policy_context(in_memory_db, monkeypatch):
     monkeypatch.setattr(orchestrator, "decide", _inspecting_decide)
 
     service = RecoveryService(agent_orchestrator=orchestrator, use_agent=True)
-    req = RecoveryEvaluationRequest(customer_id=cust_id, payment_id=pay_id, use_rag=False)
+    req = RecoveryEvaluationRequest(
+        customer_id=cust_id, payment_id=pay_id, use_rag=False
+    )
 
     await service.evaluate_recovery_async(db_session=in_memory_db, request=req)
 
@@ -484,7 +509,9 @@ def test_agent_disabled_preserves_existing_behavior(in_memory_db):
     )
 
     service = RecoveryService(use_agent=False)
-    req = RecoveryEvaluationRequest(customer_id=cust_id, payment_id=pay_id, use_rag=False)
+    req = RecoveryEvaluationRequest(
+        customer_id=cust_id, payment_id=pay_id, use_rag=False
+    )
 
     resp = service.evaluate_recovery(db_session=in_memory_db, request=req)
 
@@ -504,7 +531,7 @@ def test_agent_disabled_preserves_existing_behavior(in_memory_db):
 
 def test_service_disabled_with_request_use_agent_true_falls_back_safely(in_memory_db):
     """11. Verify service without orchestrator safely uses DecisionEngine when request.use_agent=True."""
-    cust_id, pay_id, opp_id = _seed_customer_payment_opportunity(in_memory_db)
+    cust_id, pay_id, _opp_id = _seed_customer_payment_opportunity(in_memory_db)
     service = RecoveryService(agent_orchestrator=None, use_agent=False)
 
     req = RecoveryEvaluationRequest(
@@ -539,21 +566,34 @@ async def test_service_sync_and_async_evaluations_are_identical(in_memory_db):
     cust_id_1, pay_id_1, _ = _seed_customer_payment_opportunity(in_memory_db)
     cust_id_2, pay_id_2, _ = _seed_customer_payment_opportunity(in_memory_db)
 
-    req_sync = RecoveryEvaluationRequest(customer_id=cust_id_1, payment_id=pay_id_1, use_rag=False)
-    req_async = RecoveryEvaluationRequest(customer_id=cust_id_2, payment_id=pay_id_2, use_rag=False)
+    req_sync = RecoveryEvaluationRequest(
+        customer_id=cust_id_1, payment_id=pay_id_1, use_rag=False
+    )
+    req_async = RecoveryEvaluationRequest(
+        customer_id=cust_id_2, payment_id=pay_id_2, use_rag=False
+    )
 
     resp_sync = service.evaluate_recovery(db_session=in_memory_db, request=req_sync)
-    resp_async = await service.evaluate_recovery_async(db_session=in_memory_db, request=req_async)
+    resp_async = await service.evaluate_recovery_async(
+        db_session=in_memory_db, request=req_async
+    )
 
     assert resp_sync.recommended_action == resp_async.recommended_action
     assert resp_sync.confidence == resp_async.confidence
     assert resp_sync.reason == resp_async.reason
-    assert resp_sync.agent_used == resp_async.agent_used == True
-    assert resp_sync.is_fallback == resp_async.is_fallback == False
-    assert resp_sync.decision_basis["key_factors"] == resp_async.decision_basis["key_factors"]
+    assert resp_sync.agent_used is True
+    assert resp_async.agent_used is True
+    assert resp_sync.is_fallback is False
+    assert resp_async.is_fallback is False
+    assert (
+        resp_sync.decision_basis["key_factors"]
+        == resp_async.decision_basis["key_factors"]
+    )
 
 
-def test_service_transaction_rollback_on_persistence_failure_with_agent(in_memory_db, monkeypatch):
+def test_service_transaction_rollback_on_persistence_failure_with_agent(
+    in_memory_db, monkeypatch
+):
     """13. Verify transaction rollback occurs and opportunity is not corrupted on persistence failure."""
     cust_id, pay_id, opp_id = _seed_customer_payment_opportunity(in_memory_db)
 
@@ -573,7 +613,9 @@ def test_service_transaction_rollback_on_persistence_failure_with_agent(in_memor
 
     monkeypatch.setattr(in_memory_db, "commit", _failing_commit)
 
-    req = RecoveryEvaluationRequest(customer_id=cust_id, payment_id=pay_id, use_rag=False)
+    req = RecoveryEvaluationRequest(
+        customer_id=cust_id, payment_id=pay_id, use_rag=False
+    )
 
     with pytest.raises(RuntimeError, match="Database connection lost"):
         service.evaluate_recovery(db_session=in_memory_db, request=req)
@@ -599,7 +641,9 @@ def test_service_no_recovery_attempt_created_during_agent_evaluation(in_memory_d
     orchestrator = AgentOrchestrator(provider=provider)
     service = RecoveryService(agent_orchestrator=orchestrator, use_agent=True)
 
-    req = RecoveryEvaluationRequest(customer_id=cust_id, payment_id=pay_id, use_rag=False)
+    req = RecoveryEvaluationRequest(
+        customer_id=cust_id, payment_id=pay_id, use_rag=False
+    )
     service.evaluate_recovery(db_session=in_memory_db, request=req)
 
     stmt = select(RecoveryAttempt).where(RecoveryAttempt.opportunity_id == opp_id)
@@ -608,11 +652,13 @@ def test_service_no_recovery_attempt_created_during_agent_evaluation(in_memory_d
 
 
 @pytest.mark.anyio
-async def test_service_agent_malformed_response_triggers_deterministic_fallback(in_memory_db):
+async def test_service_agent_malformed_response_triggers_deterministic_fallback(
+    in_memory_db,
+):
     """15. Verify LLMResponseValidationError produces clean deterministic fallback without leaking internal error."""
     from app.agent.provider import LLMResponseValidationError
 
-    cust_id, pay_id, opp_id = _seed_customer_payment_opportunity(in_memory_db)
+    cust_id, pay_id, _opp_id = _seed_customer_payment_opportunity(in_memory_db)
 
     dummy_rec = LLMRecoveryRecommendation(
         recommended_action=RecoveryAction.PAYMENT_LINK,
@@ -624,17 +670,72 @@ async def test_service_agent_malformed_response_triggers_deterministic_fallback(
     provider = MockLLMProvider(
         recommendation=dummy_rec,
         should_fail=True,
-        failure_exception=LLMResponseValidationError("Missing required JSON field 'confidence' in response payload"),
+        failure_exception=LLMResponseValidationError(
+            "Missing required JSON field 'confidence' in response payload"
+        ),
     )
     orchestrator = AgentOrchestrator(provider=provider)
     service = RecoveryService(agent_orchestrator=orchestrator, use_agent=True)
 
-    req = RecoveryEvaluationRequest(customer_id=cust_id, payment_id=pay_id, use_rag=False)
+    req = RecoveryEvaluationRequest(
+        customer_id=cust_id, payment_id=pay_id, use_rag=False
+    )
     resp = await service.evaluate_recovery_async(db_session=in_memory_db, request=req)
 
     assert resp.agent_used is False
     assert resp.is_fallback is True
-    assert resp.fallback_reason == "LLM provider failure; deterministic fallback applied"
+    assert (
+        resp.fallback_reason == "LLM provider failure; deterministic fallback applied"
+    )
     assert resp.decision_basis["error_type"] == "LLMResponseValidationError"
     assert "Missing required JSON field" not in resp.model_dump_json()
 
+
+def test_policy_capable_engine_type_error_fails_closed(in_memory_db):
+    """16. Verify internal TypeError in policy-capable engine is re-raised and does NOT bypass policy validation."""
+    cust_id, pay_id, _opp_id = _seed_customer_payment_opportunity(in_memory_db)
+
+    class PolicyCapableEngineWithBug:
+        def evaluate(self, context, historical_cases=None, policy_context=None):
+            # Simulates an internal TypeError inside evaluation / policy logic
+            raise TypeError("Internal bug in policy evaluation logic")
+
+    buggy_engine = PolicyCapableEngineWithBug()
+    service = RecoveryService(decision_engine=buggy_engine, use_agent=False)  # type: ignore
+
+    req = RecoveryEvaluationRequest(
+        customer_id=cust_id, payment_id=pay_id, use_rag=False
+    )
+
+    with pytest.raises(TypeError, match="Internal bug in policy evaluation logic"):
+        service.evaluate_recovery(db_session=in_memory_db, request=req)
+
+
+def test_legacy_engine_without_policy_context_supported(in_memory_db):
+    """17. Verify genuine legacy engine lacking policy_context parameter is cleanly supported."""
+    cust_id, pay_id, _opp_id = _seed_customer_payment_opportunity(in_memory_db)
+
+    class LegacyDecisionEngine:
+        def __init__(self):
+            self.invoked = False
+
+        def evaluate(self, context, historical_cases=None):
+            self.invoked = True
+            return RecoveryDecision(
+                recommended_action=RecoveryAction.PAYMENT_LINK,
+                reason="Legacy engine decision",
+                confidence=0.75,
+                decision_basis={"legacy": True},
+            )
+
+    legacy_engine = LegacyDecisionEngine()
+    service = RecoveryService(decision_engine=legacy_engine, use_agent=False)  # type: ignore
+
+    req = RecoveryEvaluationRequest(
+        customer_id=cust_id, payment_id=pay_id, use_rag=False
+    )
+    resp = service.evaluate_recovery(db_session=in_memory_db, request=req)
+
+    assert legacy_engine.invoked is True
+    assert resp.recommended_action == RecoveryAction.PAYMENT_LINK
+    assert resp.confidence == 0.75

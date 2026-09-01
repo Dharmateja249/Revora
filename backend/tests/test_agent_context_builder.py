@@ -2,10 +2,10 @@
 Unit tests for Revora Agent Context Builder.
 """
 
-from datetime import datetime, timezone
 import uuid
-import pytest
+from datetime import datetime, timezone
 
+import pytest
 from app.agent.context_builder import AgentContextBuilder
 from app.agent.schemas import AgentDecisionPromptContext
 from app.context import (
@@ -20,7 +20,6 @@ from app.decision_engine import RecoveryAction
 from app.historical_retrieval import HistoricalCase
 from app.policies.registry import (
     RZP_CUSTOMER_AUTH_2FA_REQUIRED_RULE,
-    SAFETY_MAX_ATTEMPTS_RULE,
 )
 from app.policies.schemas import RecoveryPolicyContext
 
@@ -115,7 +114,7 @@ def sample_historical_cases():
     for idx, score in enumerate(scores):
         cases.append(
             HistoricalCase(
-                payment_id=uuid.UUID(f"00000000-0000-0000-0000-00000000000{idx+1}"),
+                payment_id=uuid.UUID(f"00000000-0000-0000-0000-00000000000{idx + 1}"),
                 customer_id=uuid.uuid4(),
                 external_payment_id=f"HIST_EXT_{idx}",
                 external_customer_id=f"HIST_CUST_{idx}",
@@ -142,8 +141,14 @@ def sample_policy_context():
         provider="razorpay",
         policy_version="2026.1",
         applicable_rules=(RZP_CUSTOMER_AUTH_2FA_REQUIRED_RULE,),
-        allowed_actions=(RecoveryAction.PAYMENT_LINK, RecoveryAction.CHANGE_PAYMENT_METHOD),
-        prohibited_actions=(RecoveryAction.RETRY_PAYMENT, RecoveryAction.WAIT_AND_RETRY),
+        allowed_actions=(
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        prohibited_actions=(
+            RecoveryAction.RETRY_PAYMENT,
+            RecoveryAction.WAIT_AND_RETRY,
+        ),
         mandatory_fallback_action=RecoveryAction.PAYMENT_LINK,
         metadata={"internal_policy_data": "secret"},
     )
@@ -209,7 +214,9 @@ def test_pii_fields_excluded_from_prompt_context(
 
     # Check payment identifiers
     assert "PAY_SECRET_EXT_777" not in json_str
-    assert str(rich_customer_recovery_context.current_payment.payment_id) not in json_str
+    assert (
+        str(rich_customer_recovery_context.current_payment.payment_id) not in json_str
+    )
 
     # Check attempt references
     assert "TXN_ATT_SECRET_001" not in json_str
@@ -235,7 +242,9 @@ def test_payment_field_mapping(rich_customer_recovery_context, sample_policy_con
     assert payment_data["failure_reason"] == "authentication_failed"
 
 
-def test_customer_profile_mapping(rich_customer_recovery_context, sample_policy_context):
+def test_customer_profile_mapping(
+    rich_customer_recovery_context, sample_policy_context
+):
     """Verify customer profile aggregation mapping."""
     builder = AgentContextBuilder()
     prompt_ctx = builder.build_prompt_context(
@@ -258,7 +267,10 @@ def test_customer_profile_mapping(rich_customer_recovery_context, sample_policy_
 
     # Also verify serialized dictionary converts tuples back to JSON lists
     json_profile = prompt_ctx.model_dump(mode="json")["customer_profile"]
-    assert json_profile["previously_successful_actions"] == ["payment_link", "retry_payment"]
+    assert json_profile["previously_successful_actions"] == [
+        "payment_link",
+        "retry_payment",
+    ]
     assert json_profile["previously_failed_actions"] == ["wait_and_retry"]
 
 
@@ -421,15 +433,21 @@ def test_missing_optional_payment_or_opportunity(sample_policy_context):
     assert prompt_ctx.allowed_actions == ("change_payment_method", "payment_link")
 
 
-def test_build_prompt_context_rejects_missing_policy_context(rich_customer_recovery_context):
+def test_build_prompt_context_rejects_missing_policy_context(
+    rich_customer_recovery_context,
+):
     """Regression test for Issue 2: policy_context=None must be rejected explicitly."""
     builder = AgentContextBuilder()
 
     with pytest.raises(ValueError, match="policy_context is required"):
-        builder.build_prompt_context(rich_customer_recovery_context, policy_context=None)
+        builder.build_prompt_context(
+            rich_customer_recovery_context, policy_context=None
+        )
 
 
-def test_build_prompt_context_rejects_empty_allowed_actions(rich_customer_recovery_context):
+def test_build_prompt_context_rejects_empty_allowed_actions(
+    rich_customer_recovery_context,
+):
     """Regression test for Issue 2: policy_context with empty allowed_actions must be rejected."""
     empty_allowed_policy = RecoveryPolicyContext(
         provider="razorpay",

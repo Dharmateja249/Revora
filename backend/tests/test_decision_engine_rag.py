@@ -14,9 +14,8 @@ Verifies:
 10. End-to-end integration with HybridHistoricalRetriever
 """
 
-from datetime import datetime, timezone, timedelta
 import uuid
-import pytest
+from datetime import datetime, timedelta, timezone
 
 from app.context import (
     CustomerContext,
@@ -31,7 +30,6 @@ from app.decision_engine import (
     DecisionEngine,
     HistoricalEvidenceSynthesizer,
     RecoveryAction,
-    RecoveryDecision,
     evaluate_recovery_decision,
 )
 from app.embedding_service import get_embedding_service
@@ -48,7 +46,7 @@ def _build_context(
     payment_method: str = "card",
     opp_status: str = "open",
     payment_status: str = "failed",
-    current_attempts: list = None,
+    current_attempts: list | None = None,
 ) -> CustomerRecoveryContext:
     now = datetime(2026, 2, 1, 12, 0, 0, tzinfo=timezone.utc)
     cust_id = uuid.uuid4()
@@ -110,7 +108,10 @@ def test_backward_compatibility_without_historical_evidence():
 
     assert decision.recommended_action == RecoveryAction.RETRY_PAYMENT
     assert decision.confidence == 0.85
-    assert decision.decision_basis["rule_matched"] == "TransientTechnicalImmediateRetryRule"
+    assert (
+        decision.decision_basis["rule_matched"]
+        == "TransientTechnicalImmediateRetryRule"
+    )
     assert decision.decision_basis["historical_rag_evidence"]["has_evidence"] is False
 
 
@@ -119,7 +120,13 @@ def test_safety_permanent_failure_cannot_be_overridden():
     ctx = _build_context(failure_reason="card_expired")
     # Even if historical case recovered via retry_payment
     hist_cases = [
-        _make_hist_case(ctx.customer.customer_id, "retry_payment", True, relevance_score=0.95, reason="card_expired")
+        _make_hist_case(
+            ctx.customer.customer_id,
+            "retry_payment",
+            True,
+            relevance_score=0.95,
+            reason="card_expired",
+        )
     ]
 
     decision = evaluate_recovery_decision(ctx, historical_cases=hist_cases)
@@ -135,15 +142,21 @@ def test_safety_max_attempts_cannot_be_overridden():
     now = datetime(2026, 2, 1, 12, 0, 0, tzinfo=timezone.utc)
     attempts = [
         RecoveryAttemptContext(action="retry_payment", status="failed", created_at=now),
-        RecoveryAttemptContext(action="wait_and_retry", status="failed", created_at=now),
+        RecoveryAttemptContext(
+            action="wait_and_retry", status="failed", created_at=now
+        ),
         RecoveryAttemptContext(action="payment_link", status="failed", created_at=now),
     ]
     ctx = _build_context(current_attempts=attempts)
     hist_cases = [
-        _make_hist_case(ctx.customer.customer_id, "payment_link", True, relevance_score=0.99)
+        _make_hist_case(
+            ctx.customer.customer_id, "payment_link", True, relevance_score=0.99
+        )
     ]
 
-    decision = evaluate_recovery_decision(ctx, max_attempts=3, historical_cases=hist_cases)
+    decision = evaluate_recovery_decision(
+        ctx, max_attempts=3, historical_cases=hist_cases
+    )
 
     assert decision.recommended_action == RecoveryAction.NO_ACTION
     assert decision.decision_basis["rule_matched"] == "MaxAttemptsExceededRule"
@@ -158,8 +171,12 @@ def test_historical_evidence_boosts_confidence():
     """Verify corroborating historical cases boost confidence for the candidate action."""
     ctx = _build_context(failure_reason="bank_timeout")
     hist_cases = [
-        _make_hist_case(ctx.customer.customer_id, "retry_payment", True, relevance_score=0.9),
-        _make_hist_case(ctx.customer.customer_id, "retry_payment", True, relevance_score=0.85),
+        _make_hist_case(
+            ctx.customer.customer_id, "retry_payment", True, relevance_score=0.9
+        ),
+        _make_hist_case(
+            ctx.customer.customer_id, "retry_payment", True, relevance_score=0.85
+        ),
     ]
 
     decision = evaluate_recovery_decision(ctx, historical_cases=hist_cases)
@@ -168,15 +185,30 @@ def test_historical_evidence_boosts_confidence():
     assert decision.confidence == 0.90  # Base 0.85 + 0.05 boost
     assert "historical" in decision.reason.lower()
     assert decision.decision_basis["historical_rag_evidence"]["has_evidence"] is True
-    assert decision.decision_basis["historical_rag_evidence"]["best_action"] == RecoveryAction.RETRY_PAYMENT
+    assert (
+        decision.decision_basis["historical_rag_evidence"]["best_action"]
+        == RecoveryAction.RETRY_PAYMENT
+    )
 
 
 def test_historical_evidence_selection_on_unknown_failure():
     """Verify unclassified/custom error reason selects the historically successful action."""
     ctx = _build_context(failure_reason="custom_vendor_error_code_418")
     hist_cases = [
-        _make_hist_case(ctx.customer.customer_id, "payment_link", True, relevance_score=0.85, reason="custom_vendor_error_code_418"),
-        _make_hist_case(ctx.customer.customer_id, "payment_link", True, relevance_score=0.80, reason="custom_vendor_error_code_418"),
+        _make_hist_case(
+            ctx.customer.customer_id,
+            "payment_link",
+            True,
+            relevance_score=0.85,
+            reason="custom_vendor_error_code_418",
+        ),
+        _make_hist_case(
+            ctx.customer.customer_id,
+            "payment_link",
+            True,
+            relevance_score=0.80,
+            reason="custom_vendor_error_code_418",
+        ),
     ]
 
     decision = evaluate_recovery_decision(ctx, historical_cases=hist_cases)
@@ -191,7 +223,9 @@ def test_low_relevance_threshold_filtering():
     """Verify historical cases with relevance < 0.40 are excluded from evidence."""
     ctx = _build_context(failure_reason="custom_unknown_code")
     hist_cases = [
-        _make_hist_case(ctx.customer.customer_id, "smart_retry", True, relevance_score=0.25),
+        _make_hist_case(
+            ctx.customer.customer_id, "smart_retry", True, relevance_score=0.25
+        ),
     ]
 
     decision = evaluate_recovery_decision(ctx, historical_cases=hist_cases)
@@ -206,7 +240,9 @@ def test_failed_historical_cases_penalize_net_score():
     cid = uuid.uuid4()
     cases = [
         _make_hist_case(cid, "smart_retry", True, relevance_score=0.8),
-        _make_hist_case(cid, "smart_retry", False, relevance_score=0.9),  # 0.8 - 0.9*0.75 = 0.8 - 0.675 = +0.125
+        _make_hist_case(
+            cid, "smart_retry", False, relevance_score=0.9
+        ),  # 0.8 - 0.9*0.75 = 0.8 - 0.675 = +0.125
         _make_hist_case(cid, "payment_link", True, relevance_score=0.85),  # 0.85
     ]
 
@@ -258,7 +294,9 @@ def test_end_to_end_decision_engine_hybrid_rag_integration():
     doc = historical_case_to_document(hist_case)
     v_index.add(doc, emb_service.embed(doc.text))
 
-    sem_retriever = SemanticHistoricalRetriever(vector_index=v_index, embedding_service=emb_service)
+    sem_retriever = SemanticHistoricalRetriever(
+        vector_index=v_index, embedding_service=emb_service
+    )
 
     h_ctx = HistoricalPaymentContext(
         payment_id=p_hist,
@@ -282,7 +320,11 @@ def test_end_to_end_decision_engine_hybrid_rag_integration():
     # 2. Context with bank_timeout where immediate retry already failed on this payment
     query_pid = uuid.uuid4()
     attempts = [
-        RecoveryAttemptContext(action="retry_payment", status="failed", created_at=now - timedelta(minutes=5))
+        RecoveryAttemptContext(
+            action="retry_payment",
+            status="failed",
+            created_at=now - timedelta(minutes=5),
+        )
     ]
     context = CustomerRecoveryContext(
         customer=CustomerContext(customer_id=cid),
@@ -311,6 +353,11 @@ def test_end_to_end_decision_engine_hybrid_rag_integration():
     # Historical evidence showed customer recovered via payment link on UPI bank_timeout
     assert decision.recommended_action == RecoveryAction.PAYMENT_LINK
     assert decision.confidence == 0.80
-    assert decision.decision_basis["rule_matched"] == "TransientTechnicalHistoricalLinkPivotRule"
+    assert (
+        decision.decision_basis["rule_matched"]
+        == "TransientTechnicalHistoricalLinkPivotRule"
+    )
     assert decision.decision_basis["historical_rag_evidence"]["has_evidence"] is True
-    assert decision.decision_basis["historical_rag_evidence"]["top_case"]["payment_id"] == str(p_hist)
+    assert decision.decision_basis["historical_rag_evidence"]["top_case"][
+        "payment_id"
+    ] == str(p_hist)

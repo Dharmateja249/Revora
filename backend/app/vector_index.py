@@ -7,9 +7,9 @@ external dependencies. Instances are not thread-safe; callers must serialize
 concurrent access.
 """
 
-from collections import OrderedDict
 import math
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from collections import OrderedDict
+from collections.abc import Sequence
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -78,15 +78,17 @@ class VectorIndex:
     top-K cosine similarity search with exact tie-breaking.
     """
 
-    def __init__(self, dimension: Optional[int] = None):
+    def __init__(self, dimension: int | None = None):
         if dimension is not None and dimension <= 0:
             raise ValueError(f"VectorIndex dimension must be positive, got {dimension}")
         self._dimension = dimension
         # Store entries mapped by case_id: (Tuple[float, ...], RetrievalDocument)
-        self._entries: Dict[UUID, Tuple[Tuple[float, ...], RetrievalDocument]] = OrderedDict()
+        self._entries: dict[UUID, tuple[tuple[float, ...], RetrievalDocument]] = (
+            OrderedDict()
+        )
 
     @property
-    def dimension(self) -> Optional[int]:
+    def dimension(self) -> int | None:
         """Return the vector dimension enforced by this index, or None if uninitialized."""
         return self._dimension
 
@@ -98,15 +100,17 @@ class VectorIndex:
     def __len__(self) -> int:
         return self.size
 
-    def _validate_vector(self, vector: Sequence[float]) -> Tuple[float, ...]:
+    def _validate_vector(self, vector: Sequence[float]) -> tuple[float, ...]:
         """Validate vector numeric integrity and dimension consistency."""
         if not isinstance(vector, (list, tuple)):
-            raise TypeError(f"Vector must be a sequence of floats, got {type(vector).__name__}")
+            raise TypeError(
+                f"Vector must be a sequence of floats, got {type(vector).__name__}"
+            )
         if len(vector) == 0:
             raise ValueError("Vector cannot be empty.")
 
         # Check all elements are valid finite floats
-        validated: List[float] = []
+        validated: list[float] = []
         for idx, val in enumerate(vector):
             if not isinstance(val, (int, float)) or isinstance(val, bool):
                 raise TypeError(
@@ -157,9 +161,13 @@ class VectorIndex:
             ValueError: If lengths of documents and embeddings do not match.
         """
         if not isinstance(documents, (list, tuple)):
-            raise TypeError(f"Expected documents sequence, got {type(documents).__name__}")
+            raise TypeError(
+                f"Expected documents sequence, got {type(documents).__name__}"
+            )
         if not isinstance(embeddings, (list, tuple)):
-            raise TypeError(f"Expected embeddings sequence, got {type(embeddings).__name__}")
+            raise TypeError(
+                f"Expected embeddings sequence, got {type(embeddings).__name__}"
+            )
         if len(documents) != len(embeddings):
             raise ValueError(
                 f"Documents count ({len(documents)}) does not match embeddings count ({len(embeddings)})"
@@ -172,7 +180,7 @@ class VectorIndex:
         self,
         query_embedding: Sequence[float],
         top_k: int = 5,
-    ) -> List[VectorSearchResult]:
+    ) -> list[VectorSearchResult]:
         """
         Perform deterministic cosine similarity search against indexed vectors.
 
@@ -187,7 +195,7 @@ class VectorIndex:
 
         frozen_query = self._validate_vector(query_embedding)
 
-        scored_results: List[Tuple[float, str, RetrievalDocument]] = []
+        scored_results: list[tuple[float, str, RetrievalDocument]] = []
         for case_id, (doc_vector, doc) in self._entries.items():
             similarity = calculate_cosine_similarity(frozen_query, doc_vector)
             scored_results.append((similarity, str(case_id), doc))
@@ -195,7 +203,7 @@ class VectorIndex:
         # Sort deterministically: similarity score descending, case_id string ascending
         scored_results.sort(key=lambda item: (-item[0], item[1]))
 
-        results: List[VectorSearchResult] = []
+        results: list[VectorSearchResult] = []
         for sim, _, doc in scored_results[:top_k]:
             results.append(
                 VectorSearchResult(
@@ -206,7 +214,7 @@ class VectorIndex:
 
         return results
 
-    def get(self, case_id: UUID) -> Optional[Tuple[Tuple[float, ...], RetrievalDocument]]:
+    def get(self, case_id: UUID) -> tuple[tuple[float, ...], RetrievalDocument] | None:
         """Retrieve stored embedding and document by case_id, or None if not found."""
         return self._entries.get(case_id)
 
@@ -223,7 +231,7 @@ class VectorIndex:
 
 
 # Application-scoped default VectorIndex instance
-_shared_vector_index: Optional[VectorIndex] = None
+_shared_vector_index: VectorIndex | None = None
 
 
 def get_vector_index() -> VectorIndex:
@@ -232,4 +240,3 @@ def get_vector_index() -> VectorIndex:
     if _shared_vector_index is None:
         _shared_vector_index = VectorIndex()
     return _shared_vector_index
-

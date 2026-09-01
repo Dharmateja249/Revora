@@ -7,10 +7,10 @@ context retrieval -> RAG evidence synthesis -> decision evaluation -> transactio
 
 import asyncio
 import concurrent.futures
-from datetime import datetime, timezone
+import inspect
 import logging
-from typing import Any, Dict, List, Optional, Sequence
-from uuid import UUID
+from typing import Any
+
 from sqlalchemy.orm import Session
 
 from app.agent.orchestrator import AgentOrchestrator
@@ -40,6 +40,17 @@ from app.vector_index import VectorIndex, get_vector_index
 logger = logging.getLogger("revora.recovery_service")
 
 
+def _supports_policy_context(engine: Any) -> bool:
+    """Determine whether the decision engine accepts a policy_context argument."""
+    try:
+        sig = inspect.signature(engine.evaluate)
+        return "policy_context" in sig.parameters or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+    except (TypeError, ValueError, AttributeError):
+        return False
+
+
 def _unfreeze_for_json(data: Any) -> Any:
     """Recursively convert MappingProxyType and tuples to standard dicts and lists for JSON serialization."""
     if hasattr(data, "items"):
@@ -57,19 +68,21 @@ class RecoveryService:
 
     def __init__(
         self,
-        decision_engine: Optional[DecisionEngine] = None,
-        agent_orchestrator: Optional[AgentOrchestrator] = None,
+        decision_engine: DecisionEngine | None = None,
+        agent_orchestrator: AgentOrchestrator | None = None,
         use_agent: bool = False,
-        hybrid_retriever: Optional[HybridHistoricalRetriever] = None,
-        vector_index: Optional[VectorIndex] = None,
-        embedding_service: Optional[EmbeddingService] = None,
+        hybrid_retriever: HybridHistoricalRetriever | None = None,
+        vector_index: VectorIndex | None = None,
+        embedding_service: EmbeddingService | None = None,
     ):
         self.decision_engine = decision_engine or DecisionEngine()
         self.agent_orchestrator = agent_orchestrator
         self.use_agent = use_agent
         self.hybrid_retriever = hybrid_retriever
         self.vector_index = (
-            vector_index if isinstance(vector_index, VectorIndex) else get_vector_index()
+            vector_index
+            if isinstance(vector_index, VectorIndex)
+            else get_vector_index()
         )
         self.embedding_service = (
             embedding_service
@@ -96,21 +109,20 @@ class RecoveryService:
     def _evaluate_deterministic(
         self,
         context: Any,
-        historical_cases: Optional[List[HistoricalCase]],
+        historical_cases: list[HistoricalCase] | None,
         policy_context: RecoveryPolicyContext,
     ) -> RecoveryDecision:
-        """Helper to invoke DecisionEngine while preserving backwards compatibility."""
-        try:
+        """Helper to invoke DecisionEngine safely while distinguishing policy capability."""
+        if _supports_policy_context(self.decision_engine):
             return self.decision_engine.evaluate(
                 context=context,
                 historical_cases=historical_cases,
                 policy_context=policy_context,
             )
-        except TypeError:
-            return self.decision_engine.evaluate(
-                context=context,
-                historical_cases=historical_cases,
-            )
+        return self.decision_engine.evaluate(
+            context=context,
+            historical_cases=historical_cases,
+        )
 
     async def evaluate_recovery_async(
         self,
@@ -150,7 +162,7 @@ class RecoveryService:
         )
 
         # 3. Execute RAG Retrieval
-        retrieved_cases: Optional[List[HistoricalCase]] = None
+        retrieved_cases: list[HistoricalCase] | None = None
         historical_rag_used = False
         retrieved_evidence_count = 0
 
@@ -162,26 +174,26 @@ class RecoveryService:
 
         # 4. Evaluate Decision (Agent Orchestrator vs. Deterministic Engine)
         effective_use_agent = (
-            request.use_agent
-            if request.use_agent is not None
-            else self.use_agent
+            request.use_agent if request.use_agent is not None else self.use_agent
         )
 
         recommended_action: RecoveryAction
         confidence: float
         reason: str
-        decision_basis: Dict[str, Any]
+        decision_basis: dict[str, Any]
         agent_used: bool = False
         is_fallback: bool = False
-        fallback_reason: Optional[str] = None
+        fallback_reason: str | None = None
         policy_overridden: bool = False
 
         if effective_use_agent and self.agent_orchestrator is not None:
             try:
-                agent_result: AgentDecisionResult = await self.agent_orchestrator.decide(
-                    context=context,
-                    policy_context=policy_context,
-                    historical_cases=retrieved_cases,
+                agent_result: AgentDecisionResult = (
+                    await self.agent_orchestrator.decide(
+                        context=context,
+                        policy_context=policy_context,
+                        historical_cases=retrieved_cases,
+                    )
                 )
                 recommended_action = agent_result.recommendation.recommended_action
                 confidence = agent_result.recommendation.confidence
@@ -190,7 +202,9 @@ class RecoveryService:
                 is_fallback = agent_result.is_fallback
                 fallback_reason = agent_result.fallback_reason
 
-                policy_overridden = bool(agent_result.metadata.get("policy_overridden", False))
+                policy_overridden = bool(
+                    agent_result.metadata.get("policy_overridden", False)
+                )
 
                 raw_metadata = dict(agent_result.metadata)
                 decision_basis = {
@@ -201,15 +215,21 @@ class RecoveryService:
                     "model_name": agent_result.model_name,
                     "latency_ms": agent_result.latency_ms,
                     "key_factors": list(agent_result.recommendation.key_factors),
-                    "referenced_case_ids": list(agent_result.recommendation.referenced_case_ids),
+                    "referenced_case_ids": list(
+                        agent_result.recommendation.referenced_case_ids
+                    ),
                     "policy_overridden": policy_overridden,
                 }
                 if "error_type" in raw_metadata:
                     decision_basis["error_type"] = raw_metadata["error_type"]
                 if "violated_policy_ids" in raw_metadata:
-                    decision_basis["violated_policy_ids"] = list(raw_metadata["violated_policy_ids"])
+                    decision_basis["violated_policy_ids"] = list(
+                        raw_metadata["violated_policy_ids"]
+                    )
                 if "original_candidate_action" in raw_metadata:
-                    decision_basis["original_candidate_action"] = raw_metadata["original_candidate_action"]
+                    decision_basis["original_candidate_action"] = raw_metadata[
+                        "original_candidate_action"
+                    ]
             except (
                 CustomerNotFoundError,
                 PaymentNotFoundError,
@@ -220,7 +240,8 @@ class RecoveryService:
             ):
                 # Domain & strict policy validation errors must propagate fail-closed
                 raise
-            except Exception as unexpected_err:
+            except Exception as unexpected_err:  # noqa: BLE001
+                # Fall back safely to deterministic DecisionEngine on any unhandled agent failure
                 logger.error(
                     "Unexpected failure during agent decision orchestration for payment %s: %s; falling back to deterministic DecisionEngine",
                     request.payment_id,
@@ -277,13 +298,11 @@ class RecoveryService:
             )
             db_session.add(audit_event)
             db_session.commit()
-        except Exception as exc:
+        except Exception:
             db_session.rollback()
-            logger.error(
-                "Failed to persist recovery decision and audit event for payment %s: %s",
+            logger.exception(
+                "Failed to persist recovery decision and audit event for payment %s",
                 request.payment_id,
-                exc,
-                exc_info=True,
             )
             raise
 
@@ -328,7 +347,9 @@ class RecoveryService:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 return pool.submit(
                     lambda: asyncio.run(
-                        self.evaluate_recovery_async(db_session=db_session, request=request)
+                        self.evaluate_recovery_async(
+                            db_session=db_session, request=request
+                        )
                     )
                 ).result()
 

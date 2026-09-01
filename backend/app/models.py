@@ -1,17 +1,16 @@
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, List, Any, Dict
+from typing import Any, Optional
 
 from sqlalchemy import (
-    String,
-    Integer,
-    Float,
-    DateTime,
-    ForeignKey,
     JSON,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
     Text,
     Uuid,
-    Index,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -27,12 +26,13 @@ class Customer(Base):
     """
     Customer entity representing end-users whose payments are tracked.
     """
+
     __tablename__ = "customers"
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    external_customer_id: Mapped[Optional[str]] = mapped_column(
+    external_customer_id: Mapped[str | None] = mapped_column(
         String(255), unique=True, nullable=True, index=True
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -45,7 +45,7 @@ class Customer(Base):
     )
 
     # Relationships
-    payments: Mapped[List["Payment"]] = relationship(
+    payments: Mapped[list["Payment"]] = relationship(
         "Payment", back_populates="customer", cascade="all, delete-orphan"
     )
 
@@ -57,12 +57,13 @@ class Payment(Base):
     """
     Payment transaction record, storing payment method, status, and failure details.
     """
+
     __tablename__ = "payments"
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    external_payment_id: Mapped[Optional[str]] = mapped_column(
+    external_payment_id: Mapped[str | None] = mapped_column(
         String(255), unique=True, nullable=True, index=True
     )
     customer_id: Mapped[uuid.UUID] = mapped_column(
@@ -77,7 +78,7 @@ class Payment(Base):
     status: Mapped[str] = mapped_column(
         String(50), nullable=False, index=True
     )  # e.g., 'failed', 'succeeded', 'pending'
-    failure_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
@@ -103,6 +104,7 @@ class RecoveryOpportunity(Base):
     Recovery opportunity identified when a payment fails, estimating revenue at risk
     and driving policy-bounded recovery actions.
     """
+
     __tablename__ = "recovery_opportunities"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -120,8 +122,8 @@ class RecoveryOpportunity(Base):
     )  # e.g., 'open', 'in_progress', 'recovered', 'failed', 'abandoned'
     revenue_at_risk: Mapped[float] = mapped_column(Float, nullable=False)
     expected_recovery: Mapped[float] = mapped_column(Float, nullable=False)
-    recommended_action: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    recommended_action: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
@@ -133,10 +135,10 @@ class RecoveryOpportunity(Base):
     payment: Mapped["Payment"] = relationship(
         "Payment", back_populates="recovery_opportunity"
     )
-    attempts: Mapped[List["RecoveryAttempt"]] = relationship(
+    attempts: Mapped[list["RecoveryAttempt"]] = relationship(
         "RecoveryAttempt", back_populates="opportunity", cascade="all, delete-orphan"
     )
-    audit_events: Mapped[List["AuditEvent"]] = relationship(
+    audit_events: Mapped[list["AuditEvent"]] = relationship(
         "AuditEvent", back_populates="opportunity", cascade="all, delete-orphan"
     )
 
@@ -148,6 +150,7 @@ class RecoveryAttempt(Base):
     """
     An execution attempt to recover a failed payment (e.g., smart retry, customer prompt).
     """
+
     __tablename__ = "recovery_attempts"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -164,14 +167,14 @@ class RecoveryAttempt(Base):
         String(50), nullable=False, index=True
     )  # e.g., 'pending', 'succeeded', 'failed'
     amount_recovered: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    external_reference: Mapped[Optional[str]] = mapped_column(
+    external_reference: Mapped[str | None] = mapped_column(
         String(255), unique=True, nullable=True, index=True
     )
-    error_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
-    completed_at: Mapped[Optional[datetime]] = mapped_column(
+    completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 
@@ -188,6 +191,7 @@ class AuditEvent(Base):
     """
     Immutable audit log for decision tracking and explainability across recovery actions.
     """
+
     __tablename__ = "audit_events"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -202,7 +206,7 @@ class AuditEvent(Base):
     event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     # Map to DB column 'metadata', using attribute name 'metadata_payload' to avoid conflict with Base.metadata
-    metadata_payload: Mapped[Dict[str, Any]] = mapped_column(
+    metadata_payload: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSON, default=dict, nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(

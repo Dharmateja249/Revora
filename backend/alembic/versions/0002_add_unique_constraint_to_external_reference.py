@@ -5,17 +5,17 @@ Revises: 0001_initial_schema
 Create Date: 2026-08-27 22:25:00.000000
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy import inspect
 
 # revision identifiers, used by Alembic.
 revision: str = "0002_add_unique_external_reference"
-down_revision: Union[str, None] = "0001_initial_schema"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0001_initial_schema"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -55,7 +55,9 @@ def upgrade() -> None:
                 )
 
     # 2. Re-inspect indexes and add the UNIQUE index/constraint if not already present
-    existing_indexes = {idx["name"] for idx in inspector.get_indexes("recovery_attempts")}
+    existing_indexes = {
+        idx["name"] for idx in inspector.get_indexes("recovery_attempts")
+    }
     if "ix_recovery_attempts_external_reference" not in existing_indexes:
         with op.batch_alter_table("recovery_attempts") as batch_op:
             batch_op.create_index(
@@ -70,7 +72,9 @@ def downgrade() -> None:
     inspector = inspect(bind)
 
     if "recovery_attempts" in inspector.get_table_names():
-        existing_indexes = {idx["name"] for idx in inspector.get_indexes("recovery_attempts")}
+        existing_indexes = {
+            idx["name"] for idx in inspector.get_indexes("recovery_attempts")
+        }
         if "ix_recovery_attempts_external_reference" in existing_indexes:
             with op.batch_alter_table("recovery_attempts") as batch_op:
                 batch_op.drop_index("ix_recovery_attempts_external_reference")

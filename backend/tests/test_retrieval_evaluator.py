@@ -5,12 +5,11 @@ Tests execution flow, metric computation, aggregation, error propagation, K vali
 determinism, and protocol compatibility of RetrievalEvaluator.
 """
 
-from datetime import datetime, timezone
 import inspect
-from typing import List, Sequence
+from collections.abc import Sequence
 from uuid import UUID, uuid4
-import pytest
 
+import pytest
 from app.context import (
     CustomerContext,
     CustomerRecoveryContext,
@@ -19,10 +18,8 @@ from app.context import (
 from app.evaluation import (
     EvaluationCase,
     GroundTruthJudgment,
-    RetrievalEvalResult,
     RetrievalEvaluator,
     RetrieverBenchmarkReport,
-    RetrieverProtocol,
 )
 from app.historical_retrieval import HistoricalCase
 
@@ -42,7 +39,9 @@ def _make_dummy_context(customer_id: UUID | None = None) -> CustomerRecoveryCont
     )
 
 
-def _make_dummy_historical_case(payment_id: UUID, customer_id: UUID | None = None) -> HistoricalCase:
+def _make_dummy_historical_case(
+    payment_id: UUID, customer_id: UUID | None = None
+) -> HistoricalCase:
     return HistoricalCase(
         payment_id=payment_id,
         customer_id=customer_id or uuid4(),
@@ -61,7 +60,7 @@ class StubRetriever:
 
     def __init__(self, mapping: dict[UUID, Sequence[HistoricalCase]] | None = None):
         self.mapping = mapping or {}
-        self.invocations: List[tuple[CustomerRecoveryContext, int]] = []
+        self.invocations: list[tuple[CustomerRecoveryContext, int]] = []
 
     def retrieve_relevant_cases(
         self,
@@ -69,7 +68,9 @@ class StubRetriever:
         top_k: int,
     ) -> Sequence[HistoricalCase]:
         self.invocations.append((context, top_k))
-        curr_id = context.current_payment.payment_id if context.current_payment else None
+        curr_id = (
+            context.current_payment.payment_id if context.current_payment else None
+        )
         cases = self.mapping.get(curr_id, [])
         return cases[:top_k]
 
@@ -93,10 +94,14 @@ def test_evaluator_single_evaluation_case():
         ),
     )
 
-    stub = StubRetriever(mapping={context.current_payment.payment_id: [_make_dummy_historical_case(p1)]})
+    stub = StubRetriever(
+        mapping={context.current_payment.payment_id: [_make_dummy_historical_case(p1)]}
+    )
     evaluator = RetrievalEvaluator(evaluation_cases=[case], dataset_name="test_dataset")
 
-    report = evaluator.evaluate(retriever=stub, retriever_name="StubRetriever", k_values=(1, 3))
+    report = evaluator.evaluate(
+        retriever=stub, retriever_name="StubRetriever", k_values=(1, 3)
+    )
 
     assert isinstance(report, RetrieverBenchmarkReport)
     assert report.retriever_name == "StubRetriever"
@@ -128,7 +133,9 @@ def test_evaluator_multiple_evaluation_cases():
 
     stub = StubRetriever(mapping=mapping)
     evaluator = RetrievalEvaluator(evaluation_cases=cases)
-    report = evaluator.evaluate(retriever=stub, retriever_name="StubRetriever", k_values=(1, 5))
+    report = evaluator.evaluate(
+        retriever=stub, retriever_name="StubRetriever", k_values=(1, 5)
+    )
 
     assert report.num_queries == 3
     assert len(report.results) == 6  # 3 queries * 2 K values
@@ -146,11 +153,15 @@ def test_evaluator_alternate_retrieve_method_support():
     )
 
     class SemanticStyleRetriever:
-        def retrieve(self, context: CustomerRecoveryContext, top_k: int) -> Sequence[HistoricalCase]:
+        def retrieve(
+            self, context: CustomerRecoveryContext, top_k: int
+        ) -> Sequence[HistoricalCase]:
             return [_make_dummy_historical_case(p1)]
 
     evaluator = RetrievalEvaluator(evaluation_cases=[case])
-    report = evaluator.evaluate(retriever=SemanticStyleRetriever(), retriever_name="SemanticStyle")
+    report = evaluator.evaluate(
+        retriever=SemanticStyleRetriever(), retriever_name="SemanticStyle"
+    )
     assert report.num_queries == 1
     assert report.aggregate_metrics["mean_precision_at_1"] == 1.0
 
@@ -376,7 +387,9 @@ def test_evaluator_determinism():
         ground_truth=(GroundTruthJudgment(payment_id=p1, relevance_grade=3),),
     )
 
-    stub = StubRetriever(mapping={context.current_payment.payment_id: [_make_dummy_historical_case(p1)]})
+    stub = StubRetriever(
+        mapping={context.current_payment.payment_id: [_make_dummy_historical_case(p1)]}
+    )
     evaluator = RetrievalEvaluator(evaluation_cases=[case])
 
     report1 = evaluator.evaluate(stub, "DetStub", k_values=(1, 3))
@@ -385,7 +398,10 @@ def test_evaluator_determinism():
     # Compare all deterministic metrics
     for metric_key in report1.aggregate_metrics:
         if metric_key != "mean_latency_ms":
-            assert report1.aggregate_metrics[metric_key] == report2.aggregate_metrics[metric_key]
+            assert (
+                report1.aggregate_metrics[metric_key]
+                == report2.aggregate_metrics[metric_key]
+            )
 
     assert len(report1.results) == len(report2.results)
     for r1, r2 in zip(report1.results, report2.results):
@@ -401,8 +417,14 @@ def test_evaluator_module_isolation():
 
     source = inspect.getsource(eval_mod)
     assert "from app.historical_retriever import HistoricalRetriever" not in source
-    assert "from app.semantic_historical_retriever import SemanticHistoricalRetriever" not in source
-    assert "from app.hybrid_historical_retriever import HybridHistoricalRetriever" not in source
+    assert (
+        "from app.semantic_historical_retriever import SemanticHistoricalRetriever"
+        not in source
+    )
+    assert (
+        "from app.hybrid_historical_retriever import HybridHistoricalRetriever"
+        not in source
+    )
 
 
 def test_real_retrievers_signature_compatibility():

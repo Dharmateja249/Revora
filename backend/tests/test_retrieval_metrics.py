@@ -7,8 +7,8 @@ precision_at_k, recall_at_k, mean_reciprocal_rank, and ndcg_at_k.
 
 import math
 import uuid
-import pytest
 
+import pytest
 from app.evaluation.metrics import (
     mean_reciprocal_rank,
     ndcg_at_k,
@@ -287,7 +287,9 @@ def test_mrr_no_relevant_result():
 def test_mrr_empty_inputs():
     assert mean_reciprocal_rank([], []) == pytest.approx(0.0)
     assert mean_reciprocal_rank([_uuid()], []) == pytest.approx(0.0)
-    assert mean_reciprocal_rank([], [GroundTruthJudgment(payment_id=_uuid(), relevance_grade=3)]) == pytest.approx(0.0)
+    assert mean_reciprocal_rank(
+        [], [GroundTruthJudgment(payment_id=_uuid(), relevance_grade=3)]
+    ) == pytest.approx(0.0)
 
 
 def test_mrr_duplicate_retrieved_ids_rejected():
@@ -385,7 +387,9 @@ def test_ndcg_all_grade_0_returns_zero():
 def test_ndcg_empty_ground_truth_and_retrieved():
     assert ndcg_at_k([], [], k=5) == pytest.approx(0.0)
     assert ndcg_at_k([_uuid()], [], k=5) == pytest.approx(0.0)
-    assert ndcg_at_k([], [GroundTruthJudgment(payment_id=_uuid(), relevance_grade=3)], k=5) == pytest.approx(0.0)
+    assert ndcg_at_k(
+        [], [GroundTruthJudgment(payment_id=_uuid(), relevance_grade=3)], k=5
+    ) == pytest.approx(0.0)
 
 
 def test_ndcg_k_truncation():

@@ -2,10 +2,10 @@
 Unit tests for Revora Policy Resolver.
 """
 
-from datetime import datetime, timezone
 import uuid
-import pytest
+from datetime import datetime, timezone
 
+import pytest
 from app.context import (
     CustomerContext,
     CustomerRecoveryContext,
@@ -15,9 +15,7 @@ from app.context import (
     RecoveryOpportunityContext,
 )
 from app.decision_engine import RecoveryAction
-from app.policies.registry import PolicyRegistry
 from app.policies.resolver import resolve_policy_context
-from app.policies.schemas import PolicyType
 
 
 @pytest.fixture

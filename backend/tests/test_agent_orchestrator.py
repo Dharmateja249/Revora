@@ -2,11 +2,10 @@
 Unit tests for Revora Adaptive Recovery Agent Decision Orchestrator.
 """
 
-from datetime import datetime, timezone
 import uuid
-from typing import Dict, List
-import pytest
+from datetime import datetime, timezone
 
+import pytest
 from app.agent.orchestrator import AgentOrchestrator
 from app.agent.provider import (
     LLMProviderError,
@@ -29,7 +28,6 @@ from app.historical_retrieval import HistoricalCase
 from app.policies.registry import (
     RZP_CUSTOMER_AUTH_2FA_REQUIRED_RULE,
     RZP_PERMANENT_CREDENTIAL_ERROR_RULE,
-    SAFETY_MAX_ATTEMPTS_RULE,
 )
 from app.policies.schemas import RecoveryPolicyContext
 
@@ -98,8 +96,14 @@ def sample_policy_context() -> RecoveryPolicyContext:
         provider="razorpay",
         policy_version="2026.1",
         applicable_rules=(RZP_CUSTOMER_AUTH_2FA_REQUIRED_RULE,),
-        allowed_actions=(RecoveryAction.PAYMENT_LINK, RecoveryAction.CHANGE_PAYMENT_METHOD),
-        prohibited_actions=(RecoveryAction.RETRY_PAYMENT, RecoveryAction.WAIT_AND_RETRY),
+        allowed_actions=(
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        prohibited_actions=(
+            RecoveryAction.RETRY_PAYMENT,
+            RecoveryAction.WAIT_AND_RETRY,
+        ),
         mandatory_fallback_action=RecoveryAction.PAYMENT_LINK,
     )
 
@@ -207,8 +211,14 @@ async def test_orchestrator_respects_mandatory_fallback_on_policy_violation(
         provider="razorpay",
         policy_version="2026.1",
         applicable_rules=(RZP_PERMANENT_CREDENTIAL_ERROR_RULE,),
-        allowed_actions=(RecoveryAction.CHANGE_PAYMENT_METHOD, RecoveryAction.PAYMENT_LINK),
-        prohibited_actions=(RecoveryAction.RETRY_PAYMENT, RecoveryAction.WAIT_AND_RETRY),
+        allowed_actions=(
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+            RecoveryAction.PAYMENT_LINK,
+        ),
+        prohibited_actions=(
+            RecoveryAction.RETRY_PAYMENT,
+            RecoveryAction.WAIT_AND_RETRY,
+        ),
         mandatory_fallback_action=RecoveryAction.CHANGE_PAYMENT_METHOD,
     )
 
@@ -228,7 +238,9 @@ async def test_orchestrator_respects_mandatory_fallback_on_policy_violation(
 
     assert result.agent_used is True
     assert result.is_fallback is False
-    assert result.recommendation.recommended_action == RecoveryAction.CHANGE_PAYMENT_METHOD
+    assert (
+        result.recommendation.recommended_action == RecoveryAction.CHANGE_PAYMENT_METHOD
+    )
     assert result.metadata["policy_overridden"] is True
 
 
@@ -259,11 +271,19 @@ async def test_orchestrator_handles_provider_execution_error(
     assert isinstance(result, AgentDecisionResult)
     assert result.agent_used is False
     assert result.is_fallback is True
-    assert result.fallback_reason == "LLM provider failure; deterministic fallback applied"
+    assert (
+        result.fallback_reason == "LLM provider failure; deterministic fallback applied"
+    )
     assert result.recommendation.recommended_action == RecoveryAction.PAYMENT_LINK
     assert result.recommendation.confidence == 0.0
-    assert result.recommendation.reasoning == "Deterministic fallback triggered due to LLM provider failure."
-    assert result.recommendation.key_factors == ("deterministic_fallback", "provider_error")
+    assert (
+        result.recommendation.reasoning
+        == "Deterministic fallback triggered due to LLM provider failure."
+    )
+    assert result.recommendation.key_factors == (
+        "deterministic_fallback",
+        "provider_error",
+    )
     assert result.metadata["error_type"] == "LLMProviderError"
     assert result.latency_ms is not None
     assert result.latency_ms >= 0.0
@@ -280,7 +300,9 @@ async def test_orchestrator_handles_malformed_response_error(
     provider = MockLLMProvider(
         recommendation=valid_llm_recommendation,
         should_fail=True,
-        failure_exception=LLMResponseValidationError("Response JSON could not be decoded."),
+        failure_exception=LLMResponseValidationError(
+            "Response JSON could not be decoded."
+        ),
     )
     orchestrator = AgentOrchestrator(provider=provider)
 
@@ -291,10 +313,17 @@ async def test_orchestrator_handles_malformed_response_error(
 
     assert result.agent_used is False
     assert result.is_fallback is True
-    assert result.fallback_reason == "LLM provider failure; deterministic fallback applied"
-    assert result.recommendation.reasoning == "Deterministic fallback triggered due to LLM provider failure."
+    assert (
+        result.fallback_reason == "LLM provider failure; deterministic fallback applied"
+    )
+    assert (
+        result.recommendation.reasoning
+        == "Deterministic fallback triggered due to LLM provider failure."
+    )
     assert result.metadata["error_type"] == "LLMResponseValidationError"
-    assert "Response JSON could not be decoded" not in str(result.model_dump(mode="json"))
+    assert "Response JSON could not be decoded" not in str(
+        result.model_dump(mode="json")
+    )
 
 
 # ============================================================================
@@ -308,7 +337,9 @@ async def test_orchestrator_rejects_missing_policy_context(
     valid_llm_recommendation,
 ):
     """Verify policy_context=None raises ValueError and provider.generate() is never called."""
-    provider = MockLLMProvider(recommendation=valid_llm_recommendation, record_messages=True)
+    provider = MockLLMProvider(
+        recommendation=valid_llm_recommendation, record_messages=True
+    )
     orchestrator = AgentOrchestrator(provider=provider)
 
     with pytest.raises(ValueError, match="policy_context is required"):
@@ -335,7 +366,9 @@ async def test_orchestrator_rejects_empty_allowed_actions(
         prohibited_actions=(RecoveryAction.RETRY_PAYMENT,),
     )
 
-    provider = MockLLMProvider(recommendation=valid_llm_recommendation, record_messages=True)
+    provider = MockLLMProvider(
+        recommendation=valid_llm_recommendation, record_messages=True
+    )
     orchestrator = AgentOrchestrator(provider=provider)
 
     with pytest.raises(ValueError, match="at least one allowed action"):
@@ -359,10 +392,14 @@ def test_orchestrator_constructor_dependency_validation(valid_llm_recommendation
 
     provider = MockLLMProvider(recommendation=valid_llm_recommendation)
 
-    with pytest.raises(TypeError, match="Expected context_builder to be AgentContextBuilder"):
+    with pytest.raises(
+        TypeError, match="Expected context_builder to be AgentContextBuilder"
+    ):
         AgentOrchestrator(provider=provider, context_builder="invalid_builder")  # type: ignore
 
-    with pytest.raises(TypeError, match="Expected policy_validator to be PolicyValidator"):
+    with pytest.raises(
+        TypeError, match="Expected policy_validator to be PolicyValidator"
+    ):
         AgentOrchestrator(provider=provider, policy_validator="invalid_validator")  # type: ignore
 
 
@@ -416,7 +453,9 @@ async def test_orchestrator_does_not_leak_payment_ids(
         relevance_score=0.97,
     )
 
-    provider = MockLLMProvider(recommendation=valid_llm_recommendation, record_messages=True)
+    provider = MockLLMProvider(
+        recommendation=valid_llm_recommendation, record_messages=True
+    )
     orchestrator = AgentOrchestrator(provider=provider)
 
     await orchestrator.decide(
@@ -544,7 +583,9 @@ async def test_fallback_action_raises_when_no_compliant_action_available(
     )
     orchestrator = AgentOrchestrator(provider=provider)
 
-    with pytest.raises(ValueError, match="no policy-compliant recovery action available"):
+    with pytest.raises(
+        ValueError, match="no policy-compliant recovery action available"
+    ):
         await orchestrator.decide(
             context=sample_customer_context,
             policy_context=all_prohibited_policy,
@@ -582,7 +623,9 @@ async def test_fallback_action_selects_first_compliant_when_allowed_contains_pro
 
     assert result.is_fallback is True
     assert result.recommendation.recommended_action == RecoveryAction.PAYMENT_LINK
-    assert result.recommendation.recommended_action not in mixed_policy.prohibited_actions
+    assert (
+        result.recommendation.recommended_action not in mixed_policy.prohibited_actions
+    )
 
 
 @pytest.mark.anyio
@@ -626,8 +669,14 @@ async def test_provider_failure_never_produces_prohibited_action(
         provider="razorpay",
         policy_version="2026.1",
         applicable_rules=(),
-        allowed_actions=(RecoveryAction.WAIT_AND_RETRY, RecoveryAction.CHANGE_PAYMENT_METHOD),
-        prohibited_actions=(RecoveryAction.WAIT_AND_RETRY, RecoveryAction.RETRY_PAYMENT),
+        allowed_actions=(
+            RecoveryAction.WAIT_AND_RETRY,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        prohibited_actions=(
+            RecoveryAction.WAIT_AND_RETRY,
+            RecoveryAction.RETRY_PAYMENT,
+        ),
     )
     provider = MockLLMProvider(
         recommendation=valid_llm_recommendation,
@@ -643,7 +692,9 @@ async def test_provider_failure_never_produces_prohibited_action(
 
     assert result.recommendation.recommended_action not in policy.prohibited_actions
     assert result.recommendation.recommended_action in policy.allowed_actions
-    assert result.recommendation.recommended_action == RecoveryAction.CHANGE_PAYMENT_METHOD
+    assert (
+        result.recommendation.recommended_action == RecoveryAction.CHANGE_PAYMENT_METHOD
+    )
 
 
 @pytest.mark.anyio
@@ -680,8 +731,11 @@ async def test_provider_failure_sanitizes_fake_sensitive_exception_string(
         assert marker not in json_str
 
     # Asserts fixed sanitized strings and safe diagnostic metadata
-    assert result.fallback_reason == "LLM provider failure; deterministic fallback applied"
-    assert result.recommendation.reasoning == "Deterministic fallback triggered due to LLM provider failure."
+    assert (
+        result.fallback_reason == "LLM provider failure; deterministic fallback applied"
+    )
+    assert (
+        result.recommendation.reasoning
+        == "Deterministic fallback triggered due to LLM provider failure."
+    )
     assert result.metadata["error_type"] == "LLMProviderError"
-
-

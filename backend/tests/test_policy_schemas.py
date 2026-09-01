@@ -3,8 +3,6 @@ Unit tests for Revora Policy Schemas and Data Contracts.
 """
 
 import pytest
-from pydantic import ValidationError
-
 from app.decision_engine import RecoveryAction
 from app.policies.schemas import (
     PolicyRule,
@@ -12,6 +10,7 @@ from app.policies.schemas import (
     PolicyValidationResult,
     RecoveryPolicyContext,
 )
+from pydantic import ValidationError
 
 
 def test_policy_type_values():
@@ -42,7 +41,10 @@ def test_policy_rule_valid_construction():
     assert rule.provider == "razorpay"
     assert rule.version == "2026.1"
     assert rule.policy_type == PolicyType.PROVIDER_CONSTRAINT
-    assert rule.allowed_actions == (RecoveryAction.RETRY_PAYMENT, RecoveryAction.PAYMENT_LINK)
+    assert rule.allowed_actions == (
+        RecoveryAction.RETRY_PAYMENT,
+        RecoveryAction.PAYMENT_LINK,
+    )
     assert rule.prohibited_actions == (RecoveryAction.CHANGE_PAYMENT_METHOD,)
     assert rule.mandatory_fallback == RecoveryAction.RETRY_PAYMENT
     assert rule.priority == 800
@@ -73,7 +75,10 @@ def test_policy_rule_string_normalization_and_coercion():
     assert rule.description == "Trimmed description"
     assert rule.applicable_failure_reasons == ("bank_timeout", "network_error")
     assert rule.applicable_payment_methods == ("upi", "card")
-    assert rule.allowed_actions == (RecoveryAction.RETRY_PAYMENT, RecoveryAction.PAYMENT_LINK)
+    assert rule.allowed_actions == (
+        RecoveryAction.RETRY_PAYMENT,
+        RecoveryAction.PAYMENT_LINK,
+    )
     assert rule.prohibited_actions == (RecoveryAction.CHANGE_PAYMENT_METHOD,)
     assert rule.mandatory_fallback == RecoveryAction.RETRY_PAYMENT
 
@@ -187,4 +192,7 @@ def test_policy_validation_result_serialization():
     assert data["effective_action"] == "payment_link"
     assert data["was_overridden"] is True
     assert data["violated_policy_ids"] == ["RZP_CUSTOMER_AUTH_2FA_REQUIRED"]
-    assert data["applied_policy_ids"] == ["RZP_CUSTOMER_AUTH_2FA_REQUIRED", "SAFETY_MAX_ATTEMPTS"]
+    assert data["applied_policy_ids"] == [
+        "RZP_CUSTOMER_AUTH_2FA_REQUIRED",
+        "SAFETY_MAX_ATTEMPTS",
+    ]

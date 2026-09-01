@@ -3,7 +3,6 @@ Unit tests for Revora Deterministic Policy Validator.
 """
 
 import pytest
-
 from app.decision_engine import RecoveryAction
 from app.policies.registry import (
     RZP_CUSTOMER_AUTH_2FA_REQUIRED_RULE,
@@ -25,8 +24,14 @@ def test_allowed_candidate_action_accepted(validator):
         provider="razorpay",
         policy_version="2026.1",
         applicable_rules=(RZP_CUSTOMER_AUTH_2FA_REQUIRED_RULE,),
-        allowed_actions=(RecoveryAction.PAYMENT_LINK, RecoveryAction.CHANGE_PAYMENT_METHOD),
-        prohibited_actions=(RecoveryAction.RETRY_PAYMENT, RecoveryAction.WAIT_AND_RETRY),
+        allowed_actions=(
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        prohibited_actions=(
+            RecoveryAction.RETRY_PAYMENT,
+            RecoveryAction.WAIT_AND_RETRY,
+        ),
         mandatory_fallback_action=RecoveryAction.PAYMENT_LINK,
     )
 
@@ -48,8 +53,14 @@ def test_prohibited_action_overridden_for_auth_failure(validator):
         provider="razorpay",
         policy_version="2026.1",
         applicable_rules=(RZP_CUSTOMER_AUTH_2FA_REQUIRED_RULE,),
-        allowed_actions=(RecoveryAction.PAYMENT_LINK, RecoveryAction.CHANGE_PAYMENT_METHOD),
-        prohibited_actions=(RecoveryAction.RETRY_PAYMENT, RecoveryAction.WAIT_AND_RETRY),
+        allowed_actions=(
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        prohibited_actions=(
+            RecoveryAction.RETRY_PAYMENT,
+            RecoveryAction.WAIT_AND_RETRY,
+        ),
         mandatory_fallback_action=RecoveryAction.PAYMENT_LINK,
     )
 
@@ -72,8 +83,14 @@ def test_prohibited_action_overridden_for_card_expiry(validator):
         provider="razorpay",
         policy_version="2026.1",
         applicable_rules=(RZP_PERMANENT_CREDENTIAL_ERROR_RULE,),
-        allowed_actions=(RecoveryAction.CHANGE_PAYMENT_METHOD, RecoveryAction.PAYMENT_LINK),
-        prohibited_actions=(RecoveryAction.RETRY_PAYMENT, RecoveryAction.WAIT_AND_RETRY),
+        allowed_actions=(
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+            RecoveryAction.PAYMENT_LINK,
+        ),
+        prohibited_actions=(
+            RecoveryAction.RETRY_PAYMENT,
+            RecoveryAction.WAIT_AND_RETRY,
+        ),
         mandatory_fallback_action=RecoveryAction.CHANGE_PAYMENT_METHOD,
     )
 

@@ -6,8 +6,9 @@ ensuring clean separation from internal ORM entities and protecting customer PII
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 from uuid import UUID
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.decision_engine import RecoveryAction
@@ -41,7 +42,7 @@ class RecoveryEvaluationRequest(BaseModel):
         default=True,
         description="Whether to retrieve and incorporate empirical historical RAG evidence.",
     )
-    use_agent: Optional[bool] = Field(
+    use_agent: bool | None = Field(
         default=None,
         description="Explicitly enable/disable agent decision engine. If None, uses service default.",
     )
@@ -66,7 +67,7 @@ class RecoveryEvaluationResponse(BaseModel):
         ...,
         description="UUID of the owning customer.",
     )
-    opportunity_id: Optional[UUID] = Field(
+    opportunity_id: UUID | None = Field(
         default=None,
         description="UUID of the associated recovery opportunity, if present.",
     )
@@ -84,7 +85,7 @@ class RecoveryEvaluationResponse(BaseModel):
         le=1.0,
         description="Decision confidence score bounded between 0.0 and 1.0.",
     )
-    decision_basis: Dict[str, Any] = Field(
+    decision_basis: dict[str, Any] = Field(
         default_factory=dict,
         description="Detailed explainability signals, rules matched, and telemetry.",
     )
@@ -102,6 +103,7 @@ class RecoveryEvaluationResponse(BaseModel):
         if v is None:
             return {}
         return _unfreeze(v)
+
     historical_rag_used: bool = Field(
         default=False,
         description="Flag indicating if historical RAG evidence was utilized.",
@@ -111,15 +113,15 @@ class RecoveryEvaluationResponse(BaseModel):
         ge=0,
         description="Number of historical recovery cases retrieved and evaluated.",
     )
-    provider: Optional[str] = Field(
+    provider: str | None = Field(
         default=None,
         description="Payment provider context identifier (e.g., 'razorpay').",
     )
-    policy_version: Optional[str] = Field(
+    policy_version: str | None = Field(
         default=None,
         description="Version identifier of the applied recovery policy rules.",
     )
-    applied_policy_ids: List[str] = Field(
+    applied_policy_ids: list[str] = Field(
         default_factory=list,
         description="Identifiers of policy rules applied during decision evaluation.",
     )
@@ -135,7 +137,7 @@ class RecoveryEvaluationResponse(BaseModel):
         default=False,
         description="Flag indicating if deterministic fallback was applied.",
     )
-    fallback_reason: Optional[str] = Field(
+    fallback_reason: str | None = Field(
         default=None,
         description="Sanitized reason for applying fallback, if applicable.",
     )

@@ -3,8 +3,8 @@ Unit tests for Revora Agent Prompt Generation.
 """
 
 import json
-import pytest
 
+import pytest
 from app.agent.prompts import (
     REVORA_AGENT_SYSTEM_PROMPT,
     build_agent_messages,
@@ -91,7 +91,9 @@ def test_build_messages_structure(sample_prompt_context):
 
     user_msg = messages[1]
     assert user_msg["role"] == "user"
-    assert "Analyze the following failed payment recovery scenario" in user_msg["content"]
+    assert (
+        "Analyze the following failed payment recovery scenario" in user_msg["content"]
+    )
 
 
 def test_user_message_contains_structured_sections(sample_prompt_context):
@@ -175,6 +177,7 @@ def test_prompt_serialization_regression_for_historical_payment_ids():
     """Regression test for Finding 1: Historical payment UUIDs and customer UUIDs are never serialized in prompt."""
     import uuid
     from datetime import datetime, timezone
+
     from app.agent.context_builder import AgentContextBuilder
     from app.context import CustomerContext, CustomerRecoveryContext, PaymentContext
     from app.decision_engine import RecoveryAction
@@ -244,4 +247,3 @@ def test_prompt_serialization_regression_for_historical_payment_ids():
     assert "Confidential Name" not in user_prompt
     assert "confidential@example.com" not in user_prompt
     assert "case_1" in user_prompt
-

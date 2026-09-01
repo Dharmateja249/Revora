@@ -22,9 +22,8 @@ Tests:
 
 import math
 import uuid
-import pytest
-from pydantic import ValidationError
 
+import pytest
 from app.embedding_service import get_embedding_service
 from app.historical_retrieval import HistoricalCase
 from app.retrieval_document import (
@@ -36,7 +35,7 @@ from app.vector_index import (
     VectorSearchResult,
     calculate_cosine_similarity,
 )
-
+from pydantic import ValidationError
 
 # ============================================================================
 # 1. Cosine Similarity Calculation

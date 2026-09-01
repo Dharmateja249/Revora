@@ -1,17 +1,17 @@
-import pytest
 import uuid
-from datetime import datetime, timezone
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from datetime import datetime
 
+import pytest
 from app.database import Base
 from app.models import (
+    AuditEvent,
     Customer,
     Payment,
-    RecoveryOpportunity,
     RecoveryAttempt,
-    AuditEvent,
+    RecoveryOpportunity,
 )
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture
@@ -62,7 +62,9 @@ def test_customer_creation(db_session):
     assert customer.successful_payments == 0
     assert customer.failed_payments == 0
     assert customer.created_at is not None
-    assert customer.created_at.tzinfo is not None or isinstance(customer.created_at, datetime)
+    assert customer.created_at.tzinfo is not None or isinstance(
+        customer.created_at, datetime
+    )
 
 
 def test_customer_payment_relationship(db_session):
@@ -171,7 +173,10 @@ def test_recovery_opportunity_attempts_and_audit(db_session):
     assert opportunity.attempts[0].action == "retry_charge"
     assert len(opportunity.audit_events) == 1
     assert opportunity.audit_events[0].event_type == "policy_evaluated"
-    assert opportunity.audit_events[0].metadata_payload == {"rule_id": "pol_001", "score": 0.85}
+    assert opportunity.audit_events[0].metadata_payload == {
+        "rule_id": "pol_001",
+        "score": 0.85,
+    }
 
 
 def test_cascade_delete_from_customer(db_session):

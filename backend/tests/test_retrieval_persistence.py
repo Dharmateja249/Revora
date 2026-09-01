@@ -6,8 +6,8 @@ and overwriting safeguards.
 """
 
 from pathlib import Path
-import pytest
 
+import pytest
 from app.evaluation.persistence import (
     list_reports,
     load_latest_report,

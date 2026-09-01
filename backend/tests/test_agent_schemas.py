@@ -3,16 +3,15 @@ Unit tests for Revora Adaptive Recovery Agent Schemas.
 """
 
 from datetime import datetime, timedelta, timezone
-import pytest
-from pydantic import ValidationError
 
+import pytest
 from app.agent.schemas import (
     AgentDecisionPromptContext,
     AgentDecisionResult,
     LLMRecoveryRecommendation,
 )
 from app.decision_engine import RecoveryAction
-
+from pydantic import ValidationError
 
 # ============================================================================
 # 1. LLMRecoveryRecommendation Tests
@@ -31,7 +30,10 @@ def test_valid_llm_recommendation_creation():
 
     assert rec.recommended_action == RecoveryAction.RETRY_PAYMENT
     assert rec.confidence == 0.85
-    assert rec.reasoning == "Transient bank timeout detected with strong customer recovery history."
+    assert (
+        rec.reasoning
+        == "Transient bank timeout detected with strong customer recovery history."
+    )
     assert rec.key_factors == ("transient_failure", "high_customer_recovery_rate")
     assert rec.referenced_case_ids == ("case_123", "case_456")
 
@@ -300,7 +302,9 @@ def test_agent_decision_result_rejects_agent_used_fallback():
         reasoning="Reason.",
     )
 
-    with pytest.raises(ValidationError, match="agent_used cannot be True when is_fallback is True"):
+    with pytest.raises(
+        ValidationError, match="agent_used cannot be True when is_fallback is True"
+    ):
         AgentDecisionResult(
             recommendation=rec,
             agent_used=True,
@@ -317,7 +321,9 @@ def test_agent_decision_result_rejects_fallback_without_reason():
         reasoning="Reason.",
     )
 
-    with pytest.raises(ValidationError, match="fallback_reason is required and cannot be empty"):
+    with pytest.raises(
+        ValidationError, match="fallback_reason is required and cannot be empty"
+    ):
         AgentDecisionResult(
             recommendation=rec,
             agent_used=False,
@@ -325,7 +331,9 @@ def test_agent_decision_result_rejects_fallback_without_reason():
             fallback_reason=None,
         )
 
-    with pytest.raises(ValidationError, match="fallback_reason is required and cannot be empty"):
+    with pytest.raises(
+        ValidationError, match="fallback_reason is required and cannot be empty"
+    ):
         AgentDecisionResult(
             recommendation=rec,
             agent_used=False,
@@ -342,7 +350,9 @@ def test_agent_decision_result_rejects_inconsistent_non_fallback_without_agent()
         reasoning="Reason.",
     )
 
-    with pytest.raises(ValidationError, match="agent_used must be True when is_fallback is False"):
+    with pytest.raises(
+        ValidationError, match="agent_used must be True when is_fallback is False"
+    ):
         AgentDecisionResult(
             recommendation=rec,
             agent_used=False,
@@ -400,9 +410,11 @@ def test_agent_decision_result_rejects_naive_evaluated_at():
         reasoning="Reason.",
     )
 
-    naive_dt = datetime(2026, 8, 31, 10, 30, 0)  # No tzinfo
+    naive_dt = datetime(2026, 8, 31, 10, 30, 0)  # noqa: DTZ001 -- intentionally naive to test validator rejection
 
-    with pytest.raises(ValidationError, match="evaluated_at must be a timezone-aware datetime"):
+    with pytest.raises(
+        ValidationError, match="evaluated_at must be a timezone-aware datetime"
+    ):
         AgentDecisionResult(
             recommendation=rec,
             agent_used=True,

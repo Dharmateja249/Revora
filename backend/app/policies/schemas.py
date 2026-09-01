@@ -5,9 +5,10 @@ Defines immutable Pydantic v2 domain models for structured payment policies,
 policy contexts, and deterministic policy validation results.
 """
 
-from enum import Enum
 import types
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple, Union
+from collections.abc import Mapping
+from enum import Enum
+from typing import Any
 
 from pydantic import (
     BaseModel,
@@ -66,11 +67,11 @@ class PolicyRule(BaseModel):
     version: str
     policy_type: PolicyType
     description: str
-    applicable_failure_reasons: Tuple[str, ...] = Field(default_factory=tuple)
-    applicable_payment_methods: Tuple[str, ...] = Field(default_factory=tuple)
-    allowed_actions: Tuple[RecoveryAction, ...] = Field(default_factory=tuple)
-    prohibited_actions: Tuple[RecoveryAction, ...] = Field(default_factory=tuple)
-    mandatory_fallback: Optional[RecoveryAction] = None
+    applicable_failure_reasons: tuple[str, ...] = Field(default_factory=tuple)
+    applicable_payment_methods: tuple[str, ...] = Field(default_factory=tuple)
+    allowed_actions: tuple[RecoveryAction, ...] = Field(default_factory=tuple)
+    prohibited_actions: tuple[RecoveryAction, ...] = Field(default_factory=tuple)
+    mandatory_fallback: RecoveryAction | None = None
     priority: int = Field(default=100, ge=0)
     metadata: Mapping[str, Any] = Field(default_factory=dict)
 
@@ -78,12 +79,16 @@ class PolicyRule(BaseModel):
     @classmethod
     def _validate_non_empty_strings(cls, v: Any) -> str:
         if not isinstance(v, str) or not v.strip():
-            raise ValueError("String identifier and description fields must be non-empty strings.")
+            raise ValueError(
+                "String identifier and description fields must be non-empty strings."
+            )
         return v.strip()
 
-    @field_validator("applicable_failure_reasons", "applicable_payment_methods", mode="before")
+    @field_validator(
+        "applicable_failure_reasons", "applicable_payment_methods", mode="before"
+    )
     @classmethod
-    def _normalize_string_tuples(cls, v: Any) -> Tuple[str, ...]:
+    def _normalize_string_tuples(cls, v: Any) -> tuple[str, ...]:
         if v is None:
             return ()
         if not isinstance(v, (list, tuple, set)):
@@ -91,17 +96,21 @@ class PolicyRule(BaseModel):
         normalized = []
         for idx, item in enumerate(v):
             if not isinstance(item, str) or not item.strip():
-                raise ValueError(f"Item at index {idx} must be a non-empty string, got: {item!r}")
+                raise ValueError(
+                    f"Item at index {idx} must be a non-empty string, got: {item!r}"
+                )
             normalized.append(item.strip().lower())
         return tuple(normalized)
 
     @field_validator("allowed_actions", "prohibited_actions", mode="before")
     @classmethod
-    def _normalize_action_tuples(cls, v: Any) -> Tuple[RecoveryAction, ...]:
+    def _normalize_action_tuples(cls, v: Any) -> tuple[RecoveryAction, ...]:
         if v is None:
             return ()
         if not isinstance(v, (list, tuple, set)):
-            raise TypeError(f"Expected sequence of RecoveryAction items, got {type(v).__name__}")
+            raise TypeError(
+                f"Expected sequence of RecoveryAction items, got {type(v).__name__}"
+            )
         actions = []
         for idx, item in enumerate(v):
             if isinstance(item, RecoveryAction):
@@ -110,21 +119,27 @@ class PolicyRule(BaseModel):
                 try:
                     actions.append(RecoveryAction(item.strip().lower()))
                 except ValueError as exc:
-                    raise ValueError(f"Invalid RecoveryAction string at index {idx}: {item!r}") from exc
+                    raise ValueError(
+                        f"Invalid RecoveryAction string at index {idx}: {item!r}"
+                    ) from exc
             else:
-                raise TypeError(f"Item at index {idx} must be a RecoveryAction or valid enum string.")
+                raise TypeError(
+                    f"Item at index {idx} must be a RecoveryAction or valid enum string."
+                )
         return tuple(actions)
 
     @field_validator("mandatory_fallback", mode="before")
     @classmethod
-    def _normalize_mandatory_fallback(cls, v: Any) -> Optional[RecoveryAction]:
+    def _normalize_mandatory_fallback(cls, v: Any) -> RecoveryAction | None:
         if v is None:
             return None
         if isinstance(v, RecoveryAction):
             return v
         if isinstance(v, str):
             return RecoveryAction(v.strip().lower())
-        raise TypeError(f"mandatory_fallback must be a RecoveryAction or string, got {type(v).__name__}")
+        raise TypeError(
+            f"mandatory_fallback must be a RecoveryAction or string, got {type(v).__name__}"
+        )
 
     @field_validator("metadata", mode="before")
     @classmethod
@@ -137,7 +152,7 @@ class PolicyRule(BaseModel):
         return _freeze_nested(v) if v is not None else types.MappingProxyType({})
 
     @field_serializer("metadata")
-    def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> Dict[str, Any]:
+    def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> dict[str, Any]:
         return _unfreeze_for_serialization(v)
 
     @model_validator(mode="after")
@@ -150,7 +165,10 @@ class PolicyRule(BaseModel):
                 f"Policy '{self.policy_id}' is internally inconsistent: actions {overlap_names} "
                 f"cannot be both allowed and prohibited in the same rule."
             )
-        if self.mandatory_fallback is not None and self.mandatory_fallback in self.prohibited_actions:
+        if (
+            self.mandatory_fallback is not None
+            and self.mandatory_fallback in self.prohibited_actions
+        ):
             raise ValueError(
                 f"Policy '{self.policy_id}' has mandatory_fallback '{self.mandatory_fallback.value}' "
                 f"which is listed in prohibited_actions."
@@ -172,10 +190,10 @@ class RecoveryPolicyContext(BaseModel):
 
     provider: str
     policy_version: str
-    applicable_rules: Tuple[PolicyRule, ...] = Field(default_factory=tuple)
-    allowed_actions: Tuple[RecoveryAction, ...] = Field(default_factory=tuple)
-    prohibited_actions: Tuple[RecoveryAction, ...] = Field(default_factory=tuple)
-    mandatory_fallback_action: Optional[RecoveryAction] = None
+    applicable_rules: tuple[PolicyRule, ...] = Field(default_factory=tuple)
+    allowed_actions: tuple[RecoveryAction, ...] = Field(default_factory=tuple)
+    prohibited_actions: tuple[RecoveryAction, ...] = Field(default_factory=tuple)
+    mandatory_fallback_action: RecoveryAction | None = None
     metadata: Mapping[str, Any] = Field(default_factory=dict)
 
     @field_validator("provider", "policy_version", mode="before")
@@ -187,11 +205,13 @@ class RecoveryPolicyContext(BaseModel):
 
     @field_validator("applicable_rules", mode="before")
     @classmethod
-    def _normalize_rules(cls, v: Any) -> Tuple[PolicyRule, ...]:
+    def _normalize_rules(cls, v: Any) -> tuple[PolicyRule, ...]:
         if v is None:
             return ()
         if not isinstance(v, (list, tuple, set)):
-            raise TypeError(f"applicable_rules must be a sequence of PolicyRule, got {type(v).__name__}")
+            raise TypeError(
+                f"applicable_rules must be a sequence of PolicyRule, got {type(v).__name__}"
+            )
         rules = []
         for idx, item in enumerate(v):
             if isinstance(item, PolicyRule):
@@ -199,16 +219,20 @@ class RecoveryPolicyContext(BaseModel):
             elif isinstance(item, dict):
                 rules.append(PolicyRule(**item))
             else:
-                raise TypeError(f"Item at index {idx} must be a PolicyRule or dict, got {type(item).__name__}")
+                raise TypeError(
+                    f"Item at index {idx} must be a PolicyRule or dict, got {type(item).__name__}"
+                )
         return tuple(rules)
 
     @field_validator("allowed_actions", "prohibited_actions", mode="before")
     @classmethod
-    def _normalize_actions(cls, v: Any) -> Tuple[RecoveryAction, ...]:
+    def _normalize_actions(cls, v: Any) -> tuple[RecoveryAction, ...]:
         if v is None:
             return ()
         if not isinstance(v, (list, tuple, set)):
-            raise TypeError(f"Expected sequence of RecoveryAction items, got {type(v).__name__}")
+            raise TypeError(
+                f"Expected sequence of RecoveryAction items, got {type(v).__name__}"
+            )
         actions = []
         for idx, item in enumerate(v):
             if isinstance(item, RecoveryAction):
@@ -216,7 +240,9 @@ class RecoveryPolicyContext(BaseModel):
             elif isinstance(item, str):
                 actions.append(RecoveryAction(item.strip().lower()))
             else:
-                raise TypeError(f"Item at index {idx} must be a RecoveryAction or string.")
+                raise TypeError(
+                    f"Item at index {idx} must be a RecoveryAction or string."
+                )
         return tuple(actions)
 
     @field_validator("metadata", mode="before")
@@ -230,7 +256,7 @@ class RecoveryPolicyContext(BaseModel):
         return _freeze_nested(v) if v is not None else types.MappingProxyType({})
 
     @field_serializer("metadata")
-    def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> Dict[str, Any]:
+    def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> dict[str, Any]:
         return _unfreeze_for_serialization(v)
 
 
@@ -250,14 +276,14 @@ class PolicyValidationResult(BaseModel):
     candidate_action: RecoveryAction
     effective_action: RecoveryAction
     was_overridden: bool
-    violated_policy_ids: Tuple[str, ...] = Field(default_factory=tuple)
-    applied_policy_ids: Tuple[str, ...] = Field(default_factory=tuple)
+    violated_policy_ids: tuple[str, ...] = Field(default_factory=tuple)
+    applied_policy_ids: tuple[str, ...] = Field(default_factory=tuple)
     explanation: str
     metadata: Mapping[str, Any] = Field(default_factory=dict)
 
     @field_validator("violated_policy_ids", "applied_policy_ids", mode="before")
     @classmethod
-    def _normalize_string_tuples(cls, v: Any) -> Tuple[str, ...]:
+    def _normalize_string_tuples(cls, v: Any) -> tuple[str, ...]:
         if v is None:
             return ()
         if not isinstance(v, (list, tuple, set)):
@@ -280,5 +306,5 @@ class PolicyValidationResult(BaseModel):
         return _freeze_nested(v) if v is not None else types.MappingProxyType({})
 
     @field_serializer("metadata")
-    def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> Dict[str, Any]:
+    def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> dict[str, Any]:
         return _unfreeze_for_serialization(v)

@@ -1,18 +1,6 @@
-"""
-FastAPI Recovery Evaluation Router.
-
-Provides HTTP endpoint for evaluating failed payment recovery decisions.
-Handles HTTP request parsing, dependency injection, and domain exception translation.
-"""
-
-from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.agent.orchestrator import AgentOrchestrator
-from app.agent.provider import MockLLMProvider
-from app.agent.schemas import LLMRecoveryRecommendation
 from app.auth import AuthenticatedPrincipal, get_current_principal
 from app.config import Settings, get_settings
 from app.context import (
@@ -22,7 +10,6 @@ from app.context import (
     RecoveryOpportunityNotFoundError,
 )
 from app.database import get_db
-from app.decision_engine import RecoveryAction
 from app.embedding_service import EmbeddingService, get_embedding_service
 from app.recovery_service import RecoveryService
 from app.schemas.recovery import (
@@ -35,11 +22,18 @@ router = APIRouter()
 
 
 def get_recovery_service(
-    vector_index: Optional[VectorIndex] = Depends(get_vector_index),
-    embedding_service: Optional[EmbeddingService] = Depends(get_embedding_service),
-    settings: Optional[Settings] = Depends(get_settings),
+    vector_index: VectorIndex | None = Depends(get_vector_index),  # noqa: B008
+    embedding_service: EmbeddingService | None = Depends(get_embedding_service),  # noqa: B008
+    settings: Settings | None = Depends(get_settings),  # noqa: B008
 ) -> RecoveryService:
-    """Dependency provider for RecoveryService instance with application-scoped vector index and agent configuration."""
+    """
+    Dependency provider for RecoveryService instance with application-scoped vector index and configuration.
+
+    In the current milestone, no production LLM provider is registered by default. MockLLMProvider is strictly
+    for test and preview harnesses and is never bound to production routes. If ENABLE_AGENT_DECISION_ENGINE is
+    enabled without an explicitly injected orchestrator, RecoveryService cleanly falls back to the deterministic
+    DecisionEngine.
+    """
     resolved_index = (
         vector_index if isinstance(vector_index, VectorIndex) else get_vector_index()
     )
@@ -48,27 +42,13 @@ def get_recovery_service(
         if isinstance(embedding_service, EmbeddingService)
         else get_embedding_service()
     )
-    resolved_settings = (
-        settings if isinstance(settings, Settings) else get_settings()
-    )
+    resolved_settings = settings if isinstance(settings, Settings) else get_settings()
     use_agent = resolved_settings.ENABLE_AGENT_DECISION_ENGINE
-    agent_orchestrator: Optional[AgentOrchestrator] = None
-
-    if use_agent:
-        default_rec = LLMRecoveryRecommendation(
-            recommended_action=RecoveryAction.PAYMENT_LINK,
-            confidence=0.8,
-            reasoning="Default adaptive recovery recommendation.",
-            key_factors=("automated_recovery",),
-            referenced_case_ids=(),
-        )
-        provider = MockLLMProvider(recommendation=default_rec)
-        agent_orchestrator = AgentOrchestrator(provider=provider)
 
     return RecoveryService(
         vector_index=resolved_index,
         embedding_service=resolved_embedding,
-        agent_orchestrator=agent_orchestrator,
+        agent_orchestrator=None,
         use_agent=use_agent,
     )
 
@@ -84,15 +64,17 @@ def get_recovery_service(
         "persists an audit event, and returns a clean recovery recommendation."
     ),
 )
-async def evaluate_decision(
+def evaluate_decision(
     request: RecoveryEvaluationRequest,
-    db: Session = Depends(get_db),
-    principal: AuthenticatedPrincipal = Depends(get_current_principal),
-    recovery_service: RecoveryService = Depends(get_recovery_service),
+    db: Session = Depends(get_db),  # noqa: B008
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),  # noqa: B008
+    recovery_service: RecoveryService = Depends(get_recovery_service),  # noqa: B008
 ) -> RecoveryEvaluationResponse:
     """
     Evaluate a recovery decision for a specific failed payment and customer.
     Requires caller authentication and strict tenant authorization prior to evaluation.
+    Dispatched synchronously to FastAPI's worker threadpool to prevent blocking the ASGI event loop
+    during synchronous SQLAlchemy database, vector retrieval, and persistence operations.
     """
     if principal.customer_id != request.customer_id:
         raise HTTPException(
@@ -101,8 +83,6 @@ async def evaluate_decision(
         )
 
     try:
-        if hasattr(recovery_service, "evaluate_recovery_async"):
-            return await recovery_service.evaluate_recovery_async(db_session=db, request=request)
         return recovery_service.evaluate_recovery(db_session=db, request=request)
     except CustomerNotFoundError as exc:
         raise HTTPException(

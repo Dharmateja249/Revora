@@ -5,11 +5,11 @@ Provides a decoupled, production-style embedding abstraction that converts
 RetrievalDocument text into dense vector representations.
 """
 
-from abc import ABC, abstractmethod
 import hashlib
 import math
 import re
-from typing import Any, Dict, List, Optional, Sequence, Union
+from abc import ABC, abstractmethod
+from collections.abc import Sequence
 
 
 class EmbeddingProvider(ABC):
@@ -22,17 +22,14 @@ class EmbeddingProvider(ABC):
     @abstractmethod
     def dimension(self) -> int:
         """Return the fixed output embedding dimension."""
-        pass
 
     @abstractmethod
-    def embed(self, text: str) -> List[float]:
+    def embed(self, text: str) -> list[float]:
         """Convert a single normalized text string into a dense vector."""
-        pass
 
     @abstractmethod
-    def embed_batch(self, texts: Sequence[str]) -> List[List[float]]:
+    def embed_batch(self, texts: Sequence[str]) -> list[list[float]]:
         """Convert a batch of normalized text strings into a list of dense vectors."""
-        pass
 
 
 class DeterministicLocalEmbeddingProvider(EmbeddingProvider):
@@ -62,10 +59,10 @@ class DeterministicLocalEmbeddingProvider(EmbeddingProvider):
 
     def _hash_token(self, token: str, seed: int = 0) -> int:
         """Deterministically hash a token string to an integer index."""
-        raw = f"{seed}:{token}".encode("utf-8")
+        raw = f"{seed}:{token}".encode()
         return int(hashlib.sha256(raw).hexdigest(), 16)
 
-    def _generate_vector(self, text: str) -> List[float]:
+    def _generate_vector(self, text: str) -> list[float]:
         clean_text = self._normalize_text(text)
         vector = [0.0] * self._dimension
 
@@ -115,12 +112,14 @@ class DeterministicLocalEmbeddingProvider(EmbeddingProvider):
 
         return vector
 
-    def embed(self, text: str) -> List[float]:
+    def embed(self, text: str) -> list[float]:
         return self._generate_vector(text)
 
-    def embed_batch(self, texts: Sequence[str]) -> List[List[float]]:
+    def embed_batch(self, texts: Sequence[str]) -> list[list[float]]:
         if not isinstance(texts, (list, tuple)):
-            raise TypeError(f"Expected texts to be a sequence, got {type(texts).__name__}")
+            raise TypeError(
+                f"Expected texts to be a sequence, got {type(texts).__name__}"
+            )
         if len(texts) == 0:
             return []
         return [self._generate_vector(t) for t in texts]
@@ -134,7 +133,7 @@ class EmbeddingService:
     keeping the underlying provider decoupled and replaceable.
     """
 
-    def __init__(self, provider: Optional[EmbeddingProvider] = None):
+    def __init__(self, provider: EmbeddingProvider | None = None):
         self._provider = provider or DeterministicLocalEmbeddingProvider()
 
     @property
@@ -147,7 +146,7 @@ class EmbeddingService:
         """Return the class name of the underlying embedding provider."""
         return self._provider.__class__.__name__
 
-    def embed(self, text: str) -> List[float]:
+    def embed(self, text: str) -> list[float]:
         """
         Embed a single text string into a dense unit vector.
 
@@ -167,7 +166,7 @@ class EmbeddingService:
             )
         return vector
 
-    def embed_batch(self, texts: Sequence[str]) -> List[List[float]]:
+    def embed_batch(self, texts: Sequence[str]) -> list[list[float]]:
         """
         Embed a batch of text strings into a list of dense unit vectors, preserving order.
 
@@ -176,7 +175,9 @@ class EmbeddingService:
             ValueError: If any item in texts is empty or whitespace-only.
         """
         if not isinstance(texts, (list, tuple)):
-            raise TypeError(f"Input texts must be a list or sequence, got {type(texts).__name__}")
+            raise TypeError(
+                f"Input texts must be a list or sequence, got {type(texts).__name__}"
+            )
         if len(texts) == 0:
             return []
 
@@ -187,7 +188,9 @@ class EmbeddingService:
                     f"Item at index {idx} must be a string, got {type(item).__name__}"
                 )
             if not item.strip():
-                raise ValueError(f"Item at index {idx} cannot be empty or whitespace-only.")
+                raise ValueError(
+                    f"Item at index {idx} cannot be empty or whitespace-only."
+                )
 
         vectors = self._provider.embed_batch(texts)
         if len(vectors) != len(texts):
@@ -205,7 +208,7 @@ class EmbeddingService:
 
 
 # Global default service singleton for convenience
-_default_embedding_service: Optional[EmbeddingService] = None
+_default_embedding_service: EmbeddingService | None = None
 
 
 def get_embedding_service() -> EmbeddingService:

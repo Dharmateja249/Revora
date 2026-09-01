@@ -14,18 +14,17 @@ Tests:
 10. Response immutability (frozen=True)
 """
 
-from datetime import datetime, timezone
 import json
 import uuid
-import pytest
-from pydantic import ValidationError
+from datetime import datetime
 
+import pytest
 from app.decision_engine import RecoveryAction
 from app.schemas.recovery import (
     RecoveryEvaluationRequest,
     RecoveryEvaluationResponse,
 )
-
+from pydantic import ValidationError
 
 # ============================================================================
 # 1. RecoveryEvaluationRequest Tests
@@ -91,7 +90,10 @@ def test_request_extra_fields_forbidden():
             payment_id=uuid.uuid4(),
             unexpected_field="disallowed",  # type: ignore
         )
-    assert "extra_forbidden" in str(exc.value).lower() or "unexpected_field" in str(exc.value).lower()
+    assert (
+        "extra_forbidden" in str(exc.value).lower()
+        or "unexpected_field" in str(exc.value).lower()
+    )
 
 
 def test_request_immutability():
@@ -289,13 +291,18 @@ def test_response_agent_telemetry_explicit_values():
     )
     assert resp.agent_used is False
     assert resp.is_fallback is True
-    assert resp.fallback_reason == "LLM provider failure; deterministic fallback applied"
+    assert (
+        resp.fallback_reason == "LLM provider failure; deterministic fallback applied"
+    )
 
     # Verify JSON serialization round-trip
     parsed = json.loads(resp.model_dump_json())
     assert parsed["agent_used"] is False
     assert parsed["is_fallback"] is True
-    assert parsed["fallback_reason"] == "LLM provider failure; deterministic fallback applied"
+    assert (
+        parsed["fallback_reason"]
+        == "LLM provider failure; deterministic fallback applied"
+    )
 
 
 def test_settings_enable_agent_decision_engine_default_and_env_override(monkeypatch):

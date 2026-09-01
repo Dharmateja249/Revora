@@ -6,9 +6,10 @@ including EvaluationCase, GroundTruthJudgment, RetrievalEvalResult, and
 RetrieverBenchmarkReport.
 """
 
-from datetime import datetime, timezone
 import types
-from typing import Any, Dict, Mapping, Optional, Sequence, Set, Tuple, Union
+from collections.abc import Mapping
+from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID
 
 from pydantic import (
@@ -17,7 +18,6 @@ from pydantic import (
     Field,
     field_serializer,
     field_validator,
-    model_validator,
 )
 
 from app.context import CustomerRecoveryContext
@@ -47,12 +47,14 @@ def _unfreeze_for_serialization(val: Any) -> Any:
 
 
 # Relevance grading scale definitions
-RELEVANCE_GRADE_DESCRIPTIONS: Mapping[int, str] = types.MappingProxyType({
-    3: "Highly relevant (same customer, same root failure, compatible rail, successfully recovered)",
-    2: "Moderately relevant (same customer, related failure category or payment method)",
-    1: "Marginally relevant (same customer, general historical transaction)",
-    0: "Irrelevant (unrelated failure, incompatible rail, or uninformative historical case)",
-})
+RELEVANCE_GRADE_DESCRIPTIONS: Mapping[int, str] = types.MappingProxyType(
+    {
+        3: "Highly relevant (same customer, same root failure, compatible rail, successfully recovered)",
+        2: "Moderately relevant (same customer, related failure category or payment method)",
+        1: "Marginally relevant (same customer, general historical transaction)",
+        0: "Irrelevant (unrelated failure, incompatible rail, or uninformative historical case)",
+    }
+)
 
 
 class GroundTruthJudgment(BaseModel):
@@ -70,13 +72,15 @@ class GroundTruthJudgment(BaseModel):
 
     payment_id: UUID
     relevance_grade: int = Field(ge=0, le=3)
-    rationale: Optional[str] = None
+    rationale: str | None = None
 
     @field_validator("relevance_grade", mode="before")
     @classmethod
     def _validate_grade(cls, v: Any) -> int:
         if isinstance(v, bool) or not isinstance(v, int):
-            raise ValueError(f"relevance_grade must be an integer between 0 and 3, got: {v!r}")
+            raise ValueError(  # noqa: TRY004
+                f"relevance_grade must be an integer between 0 and 3, got: {v!r}"
+            )
         if v < 0 or v > 3:
             raise ValueError(f"relevance_grade must be in [0, 3], got: {v}")
         return v
@@ -99,14 +103,16 @@ class EvaluationCase(BaseModel):
 
     query_id: UUID
     context: CustomerRecoveryContext
-    ground_truth: Tuple[GroundTruthJudgment, ...] = Field(default_factory=tuple)
-    description: Optional[str] = None
+    ground_truth: tuple[GroundTruthJudgment, ...] = Field(default_factory=tuple)
+    description: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     metadata: Mapping[str, Any] = Field(default_factory=dict)
 
     @field_validator("ground_truth", mode="before")
     @classmethod
-    def _normalize_and_validate_ground_truth(cls, v: Any) -> Tuple[GroundTruthJudgment, ...]:
+    def _normalize_and_validate_ground_truth(
+        cls, v: Any
+    ) -> tuple[GroundTruthJudgment, ...]:
         if v is None:
             return ()
         if not isinstance(v, (list, tuple, set)):
@@ -115,7 +121,7 @@ class EvaluationCase(BaseModel):
             )
 
         judgments: list[GroundTruthJudgment] = []
-        seen_payment_ids: Set[UUID] = set()
+        seen_payment_ids: set[UUID] = set()
 
         for idx, item in enumerate(v):
             if isinstance(item, GroundTruthJudgment):
@@ -147,7 +153,7 @@ class EvaluationCase(BaseModel):
         return _freeze_nested(v) if v is not None else types.MappingProxyType({})
 
     @field_serializer("metadata")
-    def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> Dict[str, Any]:
+    def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> dict[str, Any]:
         return _unfreeze_for_serialization(v)
 
 
@@ -168,7 +174,7 @@ class RetrievalEvalResult(BaseModel):
     query_id: UUID
     retriever_name: str
     k: int = Field(gt=0)
-    retrieved_payment_ids: Tuple[UUID, ...] = Field(default_factory=tuple)
+    retrieved_payment_ids: tuple[UUID, ...] = Field(default_factory=tuple)
     precision_at_k: float = Field(ge=0.0, le=1.0)
     recall_at_k: float = Field(ge=0.0, le=1.0)
     reciprocal_rank: float = Field(ge=0.0, le=1.0)
@@ -187,18 +193,20 @@ class RetrievalEvalResult(BaseModel):
     @classmethod
     def _validate_k(cls, v: Any) -> int:
         if isinstance(v, bool) or not isinstance(v, int):
-            raise ValueError(f"k must be an integer, got: {v!r}")
+            raise ValueError(f"k must be an integer, got: {v!r}")  # noqa: TRY004
         if v <= 0:
             raise ValueError(f"k must be a positive integer (> 0), got: {v}")
         return v
 
     @field_validator("retrieved_payment_ids", mode="before")
     @classmethod
-    def _normalize_retrieved_payment_ids(cls, v: Any) -> Tuple[UUID, ...]:
+    def _normalize_retrieved_payment_ids(cls, v: Any) -> tuple[UUID, ...]:
         if v is None:
             return ()
         if not isinstance(v, (list, tuple, set)):
-            raise TypeError(f"retrieved_payment_ids must be a sequence of UUIDs, got {type(v).__name__}")
+            raise TypeError(
+                f"retrieved_payment_ids must be a sequence of UUIDs, got {type(v).__name__}"
+            )
         validated: list[UUID] = []
         for idx, item in enumerate(v):
             if isinstance(item, UUID):
@@ -207,9 +215,13 @@ class RetrievalEvalResult(BaseModel):
                 try:
                     validated.append(UUID(item.strip()))
                 except Exception as exc:
-                    raise ValueError(f"Invalid UUID string at index {idx}: {item!r}") from exc
+                    raise ValueError(
+                        f"Invalid UUID string at index {idx}: {item!r}"
+                    ) from exc
             else:
-                raise TypeError(f"Item at index {idx} must be UUID or valid UUID string, got {type(item).__name__}")
+                raise TypeError(
+                    f"Item at index {idx} must be UUID or valid UUID string, got {type(item).__name__}"
+                )
         return tuple(validated)
 
     @field_validator("metadata", mode="before")
@@ -223,7 +235,7 @@ class RetrievalEvalResult(BaseModel):
         return _freeze_nested(v) if v is not None else types.MappingProxyType({})
 
     @field_serializer("metadata")
-    def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> Dict[str, Any]:
+    def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> dict[str, Any]:
         return _unfreeze_for_serialization(v)
 
 
@@ -243,8 +255,8 @@ class RetrieverBenchmarkReport(BaseModel):
     retriever_name: str
     dataset_name: str
     num_queries: int = Field(ge=0)
-    k_values: Tuple[int, ...] = Field(default=(1, 3, 5, 10))
-    results: Tuple[RetrievalEvalResult, ...] = Field(default_factory=tuple)
+    k_values: tuple[int, ...] = Field(default=(1, 3, 5, 10))
+    results: tuple[RetrievalEvalResult, ...] = Field(default_factory=tuple)
     aggregate_metrics: Mapping[str, float] = Field(default_factory=dict)
     evaluated_at: datetime = Field(default_factory=utc_now)
     metadata: Mapping[str, Any] = Field(default_factory=dict)
@@ -267,32 +279,38 @@ class RetrieverBenchmarkReport(BaseModel):
     @classmethod
     def _validate_num_queries(cls, v: Any) -> int:
         if isinstance(v, bool) or not isinstance(v, int):
-            raise ValueError(f"num_queries must be an integer, got: {v!r}")
+            raise ValueError(f"num_queries must be an integer, got: {v!r}")  # noqa: TRY004
         if v < 0:
             raise ValueError(f"num_queries cannot be negative, got: {v}")
         return v
 
     @field_validator("k_values", mode="before")
     @classmethod
-    def _normalize_k_values(cls, v: Any) -> Tuple[int, ...]:
+    def _normalize_k_values(cls, v: Any) -> tuple[int, ...]:
         if v is None:
             return (1, 3, 5, 10)
         if not isinstance(v, (list, tuple, set)):
-            raise TypeError(f"k_values must be a sequence of positive integers, got {type(v).__name__}")
+            raise TypeError(
+                f"k_values must be a sequence of positive integers, got {type(v).__name__}"
+            )
         k_list: list[int] = []
         for idx, item in enumerate(v):
             if isinstance(item, bool) or not isinstance(item, int) or item <= 0:
-                raise ValueError(f"Item at index {idx} in k_values must be a positive integer (> 0), got: {item!r}")
+                raise ValueError(
+                    f"Item at index {idx} in k_values must be a positive integer (> 0), got: {item!r}"
+                )
             k_list.append(item)
         return tuple(k_list)
 
     @field_validator("results", mode="before")
     @classmethod
-    def _normalize_results(cls, v: Any) -> Tuple[RetrievalEvalResult, ...]:
+    def _normalize_results(cls, v: Any) -> tuple[RetrievalEvalResult, ...]:
         if v is None:
             return ()
         if not isinstance(v, (list, tuple, set)):
-            raise TypeError(f"results must be a sequence of RetrievalEvalResult, got {type(v).__name__}")
+            raise TypeError(
+                f"results must be a sequence of RetrievalEvalResult, got {type(v).__name__}"
+            )
         res_list: list[RetrievalEvalResult] = []
         for idx, item in enumerate(v):
             if isinstance(item, RetrievalEvalResult):
@@ -300,7 +318,9 @@ class RetrieverBenchmarkReport(BaseModel):
             elif isinstance(item, dict):
                 res_list.append(RetrievalEvalResult(**item))
             else:
-                raise TypeError(f"Item at index {idx} in results must be RetrievalEvalResult, got {type(item).__name__}")
+                raise TypeError(
+                    f"Item at index {idx} in results must be RetrievalEvalResult, got {type(item).__name__}"
+                )
         return tuple(res_list)
 
     @field_validator("aggregate_metrics", "metadata", mode="before")
@@ -314,7 +334,7 @@ class RetrieverBenchmarkReport(BaseModel):
         return _freeze_nested(v) if v is not None else types.MappingProxyType({})
 
     @field_serializer("aggregate_metrics", "metadata")
-    def _serialize_mappings(self, v: Mapping[str, Any], _info: Any) -> Dict[str, Any]:
+    def _serialize_mappings(self, v: Mapping[str, Any], _info: Any) -> dict[str, Any]:
         return _unfreeze_for_serialization(v)
 
 
@@ -361,24 +381,36 @@ class RetrieverEvaluationSummary(BaseModel):
         if v is None:
             return {}
         if not isinstance(v, (dict, types.MappingProxyType)):
-            raise TypeError(f"Per-K metric mapping must be a dict/Mapping, got {type(v).__name__}")
-        validated: Dict[int, float] = {}
+            raise TypeError(
+                f"Per-K metric mapping must be a dict/Mapping, got {type(v).__name__}"
+            )
+        validated: dict[int, float] = {}
         for k, val in v.items():
-            k_int = int(k) if isinstance(k, (int, str)) and not isinstance(k, bool) else -1
+            k_int = (
+                int(k) if isinstance(k, (int, str)) and not isinstance(k, bool) else -1
+            )
             if k_int <= 0:
                 raise ValueError(f"K must be a positive integer, got: {k!r}")
-            if isinstance(val, bool) or not isinstance(val, (int, float)) or not (0.0 <= float(val) <= 1.0):
-                raise ValueError(f"Metric value for K={k} must be in [0.0, 1.0], got {val!r}")
+            if (
+                isinstance(val, bool)
+                or not isinstance(val, (int, float))
+                or not (0.0 <= float(val) <= 1.0)
+            ):
+                raise ValueError(
+                    f"Metric value for K={k} must be in [0.0, 1.0], got {val!r}"
+                )
             validated[k_int] = float(val)
         return validated
 
-    @field_validator("precision_at_k", "recall_at_k", "ndcg_at_k", "metadata", mode="after")
+    @field_validator(
+        "precision_at_k", "recall_at_k", "ndcg_at_k", "metadata", mode="after"
+    )
     @classmethod
     def _freeze_mappings(cls, v: Any) -> Mapping[Any, Any]:
         return _freeze_nested(v) if v is not None else types.MappingProxyType({})
 
     @field_serializer("precision_at_k", "recall_at_k", "ndcg_at_k", "metadata")
-    def _serialize_mappings(self, v: Mapping[Any, Any], _info: Any) -> Dict[Any, Any]:
+    def _serialize_mappings(self, v: Mapping[Any, Any], _info: Any) -> dict[Any, Any]:
         return _unfreeze_for_serialization(v)
 
 
@@ -399,12 +431,20 @@ class EvaluationReport(BaseModel):
     dataset_name: str
     dataset_version: str = "v1"
     query_count: int = Field(ge=0)
-    configured_k_values: Tuple[int, ...] = Field(default=(1, 3, 5, 10))
-    retriever_summaries: Mapping[str, RetrieverEvaluationSummary] = Field(default_factory=dict)
+    configured_k_values: tuple[int, ...] = Field(default=(1, 3, 5, 10))
+    retriever_summaries: Mapping[str, RetrieverEvaluationSummary] = Field(
+        default_factory=dict
+    )
     evaluation_version: str = "1.0"
     metadata: Mapping[str, Any] = Field(default_factory=dict)
 
-    @field_validator("report_id", "dataset_name", "dataset_version", "evaluation_version", mode="before")
+    @field_validator(
+        "report_id",
+        "dataset_name",
+        "dataset_version",
+        "evaluation_version",
+        mode="before",
+    )
     @classmethod
     def _validate_non_empty_strings(cls, v: Any) -> str:
         if not isinstance(v, str) or not v.strip():
@@ -413,15 +453,19 @@ class EvaluationReport(BaseModel):
 
     @field_validator("configured_k_values", mode="before")
     @classmethod
-    def _normalize_k_values(cls, v: Any) -> Tuple[int, ...]:
+    def _normalize_k_values(cls, v: Any) -> tuple[int, ...]:
         if v is None:
             return (1, 3, 5, 10)
         if not isinstance(v, (list, tuple, set)):
-            raise TypeError(f"configured_k_values must be a sequence, got {type(v).__name__}")
+            raise TypeError(
+                f"configured_k_values must be a sequence, got {type(v).__name__}"
+            )
         k_list: list[int] = []
         for item in v:
             if isinstance(item, bool) or not isinstance(item, int) or item <= 0:
-                raise ValueError(f"K values must be positive integers (> 0), got: {item!r}")
+                raise ValueError(
+                    f"K values must be positive integers (> 0), got: {item!r}"
+                )
             k_list.append(item)
         return tuple(k_list)
 
@@ -431,15 +475,19 @@ class EvaluationReport(BaseModel):
         if v is None:
             return {}
         if not isinstance(v, (dict, types.MappingProxyType)):
-            raise TypeError(f"retriever_summaries must be a dict/Mapping, got {type(v).__name__}")
-        summaries: Dict[str, RetrieverEvaluationSummary] = {}
+            raise TypeError(
+                f"retriever_summaries must be a dict/Mapping, got {type(v).__name__}"
+            )
+        summaries: dict[str, RetrieverEvaluationSummary] = {}
         for name, summary in v.items():
             if isinstance(summary, RetrieverEvaluationSummary):
                 summaries[name] = summary
             elif isinstance(summary, dict):
                 summaries[name] = RetrieverEvaluationSummary(**summary)
             else:
-                raise TypeError(f"Summary for '{name}' must be RetrieverEvaluationSummary or dict, got {type(summary).__name__}")
+                raise TypeError(
+                    f"Summary for '{name}' must be RetrieverEvaluationSummary or dict, got {type(summary).__name__}"
+                )
         return summaries
 
     @field_validator("retriever_summaries", "metadata", mode="after")
@@ -448,7 +496,7 @@ class EvaluationReport(BaseModel):
         return _freeze_nested(v) if v is not None else types.MappingProxyType({})
 
     @field_serializer("retriever_summaries", "metadata")
-    def _serialize_mappings(self, v: Mapping[str, Any], _info: Any) -> Dict[str, Any]:
+    def _serialize_mappings(self, v: Mapping[str, Any], _info: Any) -> dict[str, Any]:
         return _unfreeze_for_serialization(v)
 
 
@@ -489,14 +537,14 @@ class RegressionReport(BaseModel):
 
     baseline_report_id: str
     candidate_report_id: str
-    checks: Tuple[RegressionCheck, ...] = Field(default_factory=tuple)
+    checks: tuple[RegressionCheck, ...] = Field(default_factory=tuple)
     overall_status: str = Field(pattern="^(PASS|WARN|FAIL)$")
     created_at: datetime = Field(default_factory=utc_now)
     metadata: Mapping[str, Any] = Field(default_factory=dict)
 
     @field_validator("checks", mode="before")
     @classmethod
-    def _normalize_checks(cls, v: Any) -> Tuple[RegressionCheck, ...]:
+    def _normalize_checks(cls, v: Any) -> tuple[RegressionCheck, ...]:
         if v is None:
             return ()
         return tuple(v) if isinstance(v, (list, tuple, set)) else (v,)
@@ -514,5 +562,3 @@ class RegressionReport(BaseModel):
 
 class EvaluationRegressionError(Exception):
     """Raised when an evaluation run violates quality regression assertions in CI."""
-    pass
-

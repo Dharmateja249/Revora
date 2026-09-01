@@ -6,9 +6,10 @@ historical recovery case with relevance scoring, designed as the canonical contr
 returned by any retrieval backend (deterministic or vector-based).
 """
 
-from datetime import datetime, timezone
 import types
-from typing import Any, Dict, Mapping, Optional, Set
+from collections.abc import Mapping
+from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID
 
 from pydantic import (
@@ -46,7 +47,7 @@ def _unfreeze_for_serialization(val: Any) -> Any:
     return val
 
 
-SUPPORTED_RECOVERY_STATUSES: Set[str] = {
+SUPPORTED_RECOVERY_STATUSES: set[str] = {
     "open",
     "in_progress",
     "recovered",
@@ -75,27 +76,27 @@ class HistoricalCase(BaseModel):
     # Identifiers (No PII)
     payment_id: UUID
     customer_id: UUID
-    external_payment_id: Optional[str] = None
-    external_customer_id: Optional[str] = None
+    external_payment_id: str | None = None
+    external_customer_id: str | None = None
 
     # Payment details
     amount: float = Field(ge=0.0)
     currency: str = Field(default="INR")
     payment_method: str
-    failure_reason: Optional[str] = None
+    failure_reason: str | None = None
 
     # Recovery actions & outcomes
-    recovery_action: Optional[str] = None
+    recovery_action: str | None = None
     recovery_status: str
     amount_recovered: float = Field(default=0.0, ge=0.0)
     was_recovered: bool = False
 
     # Retrieval relevance scoring [0.0, 1.0]
-    relevance_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    relevance_score: float | None = Field(default=None, ge=0.0, le=1.0)
 
     # Temporal & retrieval metadata
-    created_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    completed_at: datetime | None = None
     metadata: Mapping[str, Any] = Field(default_factory=dict)
 
     @field_validator("recovery_status", mode="before")
@@ -107,7 +108,7 @@ class HistoricalCase(BaseModel):
         if normalized not in SUPPORTED_RECOVERY_STATUSES:
             raise ValueError(
                 f"Invalid or unsupported recovery status '{v}'. "
-                f"Must be one of {sorted(list(SUPPORTED_RECOVERY_STATUSES))}."
+                f"Must be one of {sorted(SUPPORTED_RECOVERY_STATUSES)}."
             )
         return normalized
 
@@ -133,7 +134,7 @@ class HistoricalCase(BaseModel):
         return _freeze_nested(v)
 
     @field_serializer("metadata")
-    def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> Dict[str, Any]:
+    def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> dict[str, Any]:
         return _unfreeze_for_serialization(v)
 
     @model_validator(mode="after")

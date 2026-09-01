@@ -5,9 +5,9 @@ Defines the immutable RetrievalDocument contract and deterministic conversion fr
 HistoricalCase into canonical normalized text ready for downstream embedding models.
 """
 
-from datetime import datetime
 import types
-from typing import Any, Dict, Mapping, Optional
+from collections.abc import Mapping
+from typing import Any
 from uuid import UUID
 
 from pydantic import (
@@ -82,7 +82,7 @@ class RetrievalDocument(BaseModel):
         return _freeze_nested(v)
 
     @field_serializer("metadata")
-    def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> Dict[str, Any]:
+    def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> dict[str, Any]:
         return _unfreeze_for_serialization(v)
 
 
@@ -141,15 +141,23 @@ def historical_case_to_document(case: HistoricalCase) -> RetrievalDocument:
     text = construct_canonical_case_text(case)
 
     # Build safe, non-PII retrieval metadata
-    doc_metadata: Dict[str, Any] = {
+    doc_metadata: dict[str, Any] = {
         "payment_id": str(case.payment_id),
         "customer_id": str(case.customer_id),
         "amount": case.amount,
         "currency": case.currency.strip().upper() if case.currency else "INR",
-        "payment_method": case.payment_method.strip().lower() if case.payment_method else "unknown",
-        "failure_reason": case.failure_reason.strip().lower() if case.failure_reason else None,
-        "recovery_status": case.recovery_status.strip().lower() if case.recovery_status else "unknown",
-        "recovery_action": case.recovery_action.strip().lower() if case.recovery_action else None,
+        "payment_method": case.payment_method.strip().lower()
+        if case.payment_method
+        else "unknown",
+        "failure_reason": case.failure_reason.strip().lower()
+        if case.failure_reason
+        else None,
+        "recovery_status": case.recovery_status.strip().lower()
+        if case.recovery_status
+        else "unknown",
+        "recovery_action": case.recovery_action.strip().lower()
+        if case.recovery_action
+        else None,
         "amount_recovered": case.amount_recovered,
         "was_recovered": case.was_recovered,
     }

@@ -21,22 +21,10 @@ Tests:
 9. OpenAPI schema regression: /openapi.json contains POST /v1/recovery/evaluate-decision
 """
 
-from datetime import datetime, timezone, timedelta
 import uuid
-from fastapi import status
-from fastapi.testclient import TestClient
-import pytest
-from sqlalchemy import create_engine, select
-from sqlalchemy.pool import StaticPool
-from sqlalchemy.orm import sessionmaker
+from datetime import timedelta
 
-from app.auth import AuthenticatedPrincipal, get_current_principal
-from app.context import (
-    CustomerNotFoundError,
-    PaymentCustomerMismatchError,
-    PaymentNotFoundError,
-    RecoveryOpportunityNotFoundError,
-)
+import pytest
 from app.database import Base, get_db
 from app.decision_engine import RecoveryAction
 from app.embedding_service import get_embedding_service
@@ -46,11 +34,14 @@ from app.recovery_service import RecoveryService
 from app.retrieval_document import RetrievalDocument
 from app.routers.recovery import get_recovery_service
 from app.schemas.recovery import (
-    RecoveryEvaluationRequest,
     RecoveryEvaluationResponse,
 )
-from app.vector_index import VectorIndex, get_vector_index
-
+from app.vector_index import get_vector_index
+from fastapi import status
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 # ============================================================================
 # Database & TestClient Fixtures
@@ -148,7 +139,9 @@ def test_evaluate_decision_endpoint_happy_path(client, test_db_session):
     }
     headers = {"Authorization": f"Bearer {customer.id}"}
 
-    response = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
+    response = client.post(
+        "/v1/recovery/evaluate-decision", json=payload, headers=headers
+    )
 
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
@@ -171,7 +164,9 @@ def test_evaluate_decision_endpoint_happy_path(client, test_db_session):
 
 def test_evaluate_decision_endpoint_rag_disabled(client, test_db_session):
     """Verify POST /v1/recovery/evaluate-decision with use_rag=False."""
-    customer, payment, opportunity = _seed_customer_payment_opportunity(test_db_session)
+    customer, payment, _opportunity = _seed_customer_payment_opportunity(
+        test_db_session
+    )
 
     payload = {
         "customer_id": str(customer.id),
@@ -180,7 +175,9 @@ def test_evaluate_decision_endpoint_rag_disabled(client, test_db_session):
     }
     headers = {"Authorization": f"Bearer {customer.id}"}
 
-    response = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
+    response = client.post(
+        "/v1/recovery/evaluate-decision", json=payload, headers=headers
+    )
 
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
@@ -223,7 +220,7 @@ def test_invalid_token_format_rejected_401(client, test_db_session):
 
 def test_cross_customer_request_rejected_403(client, test_db_session):
     """Verify authenticated customer requesting another customer's ID returns 403 Forbidden."""
-    cust_a, pay_a, _ = _seed_customer_payment_opportunity(test_db_session)
+    cust_a, _pay_a, _ = _seed_customer_payment_opportunity(test_db_session)
     cust_b, pay_b, _ = _seed_customer_payment_opportunity(test_db_session)
 
     # Caller authenticated as Customer A, but requests evaluation for Customer B
@@ -240,7 +237,7 @@ def test_cross_customer_request_rejected_403(client, test_db_session):
 
 def test_authorization_failure_causes_zero_database_mutation(client, test_db_session):
     """Verify that unauthorized requests perform zero database mutations or audit event creation."""
-    cust_a, pay_a, _ = _seed_customer_payment_opportunity(test_db_session)
+    cust_a, _pay_a, _ = _seed_customer_payment_opportunity(test_db_session)
     cust_b, pay_b, opp_b = _seed_customer_payment_opportunity(test_db_session)
 
     initial_action = opp_b.recommended_action
@@ -356,7 +353,7 @@ def test_payment_not_found_returns_404(client, test_db_session):
 
 def test_payment_customer_mismatch_returns_403(client, test_db_session):
     """Verify PaymentCustomerMismatchError translates to HTTP 403 Forbidden."""
-    customer1, payment1, _ = _seed_customer_payment_opportunity(test_db_session)
+    _customer1, payment1, _ = _seed_customer_payment_opportunity(test_db_session)
     customer2, _, _ = _seed_customer_payment_opportunity(test_db_session)
 
     # Customer 2 authorized to request customer2, but payment1 belongs to customer1
@@ -530,6 +527,7 @@ def test_openapi_schema_contains_recovery_endpoint(client):
 def test_get_recovery_service_disabled_by_configuration():
     """Verify get_recovery_service constructs deterministic service when ENABLE_AGENT_DECISION_ENGINE is False."""
     from app.config import Settings
+
     settings = Settings(ENABLE_AGENT_DECISION_ENGINE=False, _env_file=None)
     service = get_recovery_service(settings=settings)
 
@@ -537,21 +535,27 @@ def test_get_recovery_service_disabled_by_configuration():
     assert service.agent_orchestrator is None
 
 
-def test_get_recovery_service_enabled_by_configuration():
-    """Verify get_recovery_service constructs AgentOrchestrator when ENABLE_AGENT_DECISION_ENGINE is True."""
+def test_get_recovery_service_enabled_by_configuration_does_not_construct_mock_provider():
+    """Verify get_recovery_service does NOT construct MockLLMProvider for production traffic."""
     from app.config import Settings
+
     settings = Settings(ENABLE_AGENT_DECISION_ENGINE=True, _env_file=None)
     service = get_recovery_service(settings=settings)
 
     assert service.use_agent is True
-    assert service.agent_orchestrator is not None
+    # Orchestrator is None because no production LLM provider is registered
+    assert service.agent_orchestrator is None
 
 
-def test_router_agent_enabled_via_app_settings(client, test_db_session):
-    """Verify POST /v1/recovery/evaluate-decision executes agent path when ENABLE_AGENT_DECISION_ENGINE is True."""
+def test_router_agent_enabled_without_orchestrator_falls_back_to_deterministic(
+    client, test_db_session
+):
+    """Verify POST /v1/recovery/evaluate-decision safely executes deterministic path when no production orchestrator exists."""
     from app.config import Settings, get_settings
 
-    customer, payment, opportunity = _seed_customer_payment_opportunity(test_db_session)
+    customer, payment, _opportunity = _seed_customer_payment_opportunity(
+        test_db_session
+    )
 
     app.dependency_overrides[get_settings] = lambda: Settings(
         ENABLE_AGENT_DECISION_ENGINE=True, _env_file=None
@@ -567,16 +571,19 @@ def test_router_agent_enabled_via_app_settings(client, test_db_session):
     resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
     assert resp.status_code == status.HTTP_200_OK
     data = resp.json()
-    assert data["agent_used"] is True
+    assert data["agent_used"] is False
     assert data["is_fallback"] is False
-    assert data["recommended_action"] == "payment_link"
 
 
-def test_router_request_level_use_agent_false_overrides_enabled_service(client, test_db_session):
+def test_router_request_level_use_agent_false_overrides_enabled_service(
+    client, test_db_session
+):
     """Verify request.use_agent=False overrides service-level agent enablement to run deterministic engine."""
     from app.config import Settings, get_settings
 
-    customer, payment, opportunity = _seed_customer_payment_opportunity(test_db_session)
+    customer, payment, _opportunity = _seed_customer_payment_opportunity(
+        test_db_session
+    )
 
     app.dependency_overrides[get_settings] = lambda: Settings(
         ENABLE_AGENT_DECISION_ENGINE=True, _env_file=None
@@ -603,7 +610,9 @@ def test_router_custom_orchestrator_dependency_injection(client, test_db_session
     from app.agent.provider import MockLLMProvider
     from app.agent.schemas import LLMRecoveryRecommendation
 
-    customer, payment, opportunity = _seed_customer_payment_opportunity(test_db_session)
+    customer, payment, _opportunity = _seed_customer_payment_opportunity(
+        test_db_session
+    )
 
     custom_rec = LLMRecoveryRecommendation(
         recommended_action=RecoveryAction.CHANGE_PAYMENT_METHOD,
@@ -612,7 +621,9 @@ def test_router_custom_orchestrator_dependency_injection(client, test_db_session
         key_factors=("custom_factor",),
         referenced_case_ids=(),
     )
-    custom_orchestrator = AgentOrchestrator(provider=MockLLMProvider(recommendation=custom_rec))
+    custom_orchestrator = AgentOrchestrator(
+        provider=MockLLMProvider(recommendation=custom_rec)
+    )
 
     app.dependency_overrides[get_recovery_service] = lambda: RecoveryService(
         agent_orchestrator=custom_orchestrator,

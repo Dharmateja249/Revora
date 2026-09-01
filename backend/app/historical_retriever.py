@@ -6,9 +6,8 @@ using interpretable, deterministic heuristic signals (failure category similarit
 method matching, amount proximity, recency, and recovery outcome) without ML or LLMs.
 """
 
-from datetime import datetime, timezone
-import math
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
+from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -16,8 +15,6 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.context import (
     CustomerRecoveryContext,
-    HistoricalPaymentContext,
-    PaymentContext,
 )
 from app.decision_engine import (
     CUSTOMER_INTERACTION_REASONS,
@@ -28,7 +25,6 @@ from app.decision_engine import (
 from app.historical_retrieval import HistoricalCase
 from app.models import Payment, RecoveryOpportunity
 
-
 # Weights for the deterministic scoring formula (Sum = 1.0)
 WEIGHT_FAILURE_REASON = 0.35
 WEIGHT_PAYMENT_METHOD = 0.25
@@ -38,7 +34,7 @@ WEIGHT_RECOVERY_OUTCOME = 0.10
 WEIGHT_CURRENCY = 0.05
 
 
-def _classify_failure_category(reason: Optional[str]) -> Optional[str]:
+def _classify_failure_category(reason: str | None) -> str | None:
     """Classify failure reason into deterministic domain category."""
     if not reason:
         return None
@@ -63,8 +59,8 @@ def _classify_failure_category(reason: Optional[str]) -> Optional[str]:
 
 
 def _calculate_failure_similarity(
-    query_reason: Optional[str],
-    candidate_reason: Optional[str],
+    query_reason: str | None,
+    candidate_reason: str | None,
 ) -> float:
     """Calculate deterministic failure reason similarity in [0.0, 1.0]."""
     if not query_reason and not candidate_reason:
@@ -97,8 +93,8 @@ def _calculate_failure_similarity(
 
 
 def _calculate_payment_method_similarity(
-    query_method: Optional[str],
-    candidate_method: Optional[str],
+    query_method: str | None,
+    candidate_method: str | None,
 ) -> float:
     """Calculate payment method match score in [0.0, 1.0]."""
     if not query_method or not candidate_method:
@@ -139,8 +135,8 @@ def _calculate_amount_similarity(
 
 
 def _calculate_recency_score(
-    query_time: Optional[datetime],
-    candidate_time: Optional[datetime],
+    query_time: datetime | None,
+    candidate_time: datetime | None,
     half_life_days: float = 30.0,
 ) -> float:
     """Calculate recency score using deterministic exponential decay."""
@@ -167,16 +163,16 @@ class CandidateCase:
         amount: float,
         currency: str,
         payment_method: str,
-        failure_reason: Optional[str],
+        failure_reason: str | None,
         recovery_status: str,
         amount_recovered: float,
         was_recovered: bool,
-        recovery_action: Optional[str] = None,
-        external_payment_id: Optional[str] = None,
-        external_customer_id: Optional[str] = None,
-        created_at: Optional[datetime] = None,
-        completed_at: Optional[datetime] = None,
-        raw_metadata: Optional[Dict[str, Any]] = None,
+        recovery_action: str | None = None,
+        external_payment_id: str | None = None,
+        external_customer_id: str | None = None,
+        created_at: datetime | None = None,
+        completed_at: datetime | None = None,
+        raw_metadata: dict[str, Any] | None = None,
     ):
         self.payment_id = payment_id
         self.customer_id = customer_id
@@ -203,14 +199,14 @@ class HistoricalRetriever:
     using transparent, rule-based relevance scoring.
     """
 
-    def __init__(self, db_session: Optional[Session] = None):
+    def __init__(self, db_session: Session | None = None):
         self.db_session = db_session
 
     def retrieve_relevant_cases(
         self,
         context: CustomerRecoveryContext,
         top_k: int = 5,
-    ) -> List[HistoricalCase]:
+    ) -> list[HistoricalCase]:
         """
         Retrieve and rank top-k relevant historical recovery cases for the current context.
 
@@ -230,7 +226,7 @@ class HistoricalRetriever:
             return []
 
         # 2. Score and Rank Candidates
-        scored_candidates: List[Tuple[float, Dict[str, float], CandidateCase]] = []
+        scored_candidates: list[tuple[float, dict[str, float], CandidateCase]] = []
         for candidate in candidates:
             score, breakdown = self._calculate_relevance(context, candidate)
             scored_candidates.append((score, breakdown, candidate))
@@ -239,7 +235,7 @@ class HistoricalRetriever:
         ranked = self._rank_candidates(scored_candidates)
 
         # 4. Convert Top-K to Canonical HistoricalCase Contracts
-        top_cases: List[HistoricalCase] = []
+        top_cases: list[HistoricalCase] = []
         for score, breakdown, cand in ranked[:top_k]:
             top_cases.append(self._to_historical_case(cand, score, breakdown))
 
@@ -248,7 +244,7 @@ class HistoricalRetriever:
     def _retrieve_candidates(
         self,
         context: CustomerRecoveryContext,
-    ) -> List[CandidateCase]:
+    ) -> list[CandidateCase]:
         """
         Retrieve candidate historical payments respecting customer isolation and temporal ordering.
         """
@@ -257,7 +253,7 @@ class HistoricalRetriever:
         current_payment_id = current_payment.payment_id if current_payment else None
         current_created_at = current_payment.created_at if current_payment else None
 
-        candidates: List[CandidateCase] = []
+        candidates: list[CandidateCase] = []
 
         # Strategy A: Database Query with Eager Loading (Avoids N+1 queries)
         if self.db_session is not None:
@@ -287,10 +283,10 @@ class HistoricalRetriever:
             for p in payments:
                 opp = p.recovery_opportunity
                 was_recovered = False
-                recovery_action: Optional[str] = None
+                recovery_action: str | None = None
                 amount_recovered = 0.0
                 recovery_status = "recovered" if p.status == "succeeded" else "failed"
-                completed_at: Optional[datetime] = None
+                completed_at: datetime | None = None
 
                 if opp is not None:
                     recovery_status = opp.status
@@ -303,7 +299,9 @@ class HistoricalRetriever:
                         for att in opp.attempts:
                             if att.status == "succeeded":
                                 was_recovered = True
-                                amount_recovered = max(amount_recovered, att.amount_recovered)
+                                amount_recovered = max(
+                                    amount_recovered, att.amount_recovered
+                                )
                                 recovery_action = att.action
                                 if att.completed_at:
                                     completed_at = att.completed_at
@@ -333,7 +331,10 @@ class HistoricalRetriever:
         # Strategy B: Context Historical Payments (Zero DB access fallback)
         else:
             for hist_p in context.historical_payments:
-                if current_payment_id is not None and hist_p.payment_id == current_payment_id:
+                if (
+                    current_payment_id is not None
+                    and hist_p.payment_id == current_payment_id
+                ):
                     continue
 
                 if (
@@ -378,19 +379,25 @@ class HistoricalRetriever:
         self,
         context: CustomerRecoveryContext,
         candidate: CandidateCase,
-    ) -> Tuple[float, Dict[str, float]]:
+    ) -> tuple[float, dict[str, float]]:
         """
         Compute deterministic relevance score in [0.0, 1.0] for a candidate.
         """
         current_payment = context.current_payment
-        query_failure_reason = current_payment.failure_reason if current_payment else None
-        query_payment_method = current_payment.payment_method if current_payment else None
+        query_failure_reason = (
+            current_payment.failure_reason if current_payment else None
+        )
+        query_payment_method = (
+            current_payment.payment_method if current_payment else None
+        )
         query_amount = current_payment.amount if current_payment else 0.0
         query_currency = current_payment.currency if current_payment else "INR"
         query_created_at = current_payment.created_at if current_payment else None
 
         # 1. Failure Reason Similarity
-        failure_sim = _calculate_failure_similarity(query_failure_reason, candidate.failure_reason)
+        failure_sim = _calculate_failure_similarity(
+            query_failure_reason, candidate.failure_reason
+        )
 
         # 2. Payment Method Match
         method_sim = _calculate_payment_method_similarity(
@@ -401,7 +408,9 @@ class HistoricalRetriever:
         amount_sim = _calculate_amount_similarity(query_amount, candidate.amount)
 
         # 4. Currency Match
-        currency_sim = 1.0 if query_currency.upper() == candidate.currency.upper() else 0.0
+        currency_sim = (
+            1.0 if query_currency.upper() == candidate.currency.upper() else 0.0
+        )
 
         # 5. Recency
         recency_sim = _calculate_recency_score(query_created_at, candidate.created_at)
@@ -435,15 +444,16 @@ class HistoricalRetriever:
 
     def _rank_candidates(
         self,
-        scored_candidates: List[Tuple[float, Dict[str, float], CandidateCase]],
-    ) -> List[Tuple[float, Dict[str, float], CandidateCase]]:
+        scored_candidates: list[tuple[float, dict[str, float], CandidateCase]],
+    ) -> list[tuple[float, dict[str, float], CandidateCase]]:
         """
         Deterministically sort candidates:
         1. Relevance score descending
         2. Recency timestamp descending
         3. Payment UUID string ascending (strict tie-breaking)
         """
-        def sort_key(item: Tuple[float, Dict[str, float], CandidateCase]):
+
+        def sort_key(item: tuple[float, dict[str, float], CandidateCase]):
             score, _, cand = item
             timestamp = cand.created_at.timestamp() if cand.created_at else 0.0
             return (-score, -timestamp, str(cand.payment_id))
@@ -454,7 +464,7 @@ class HistoricalRetriever:
         self,
         candidate: CandidateCase,
         relevance_score: float,
-        breakdown: Dict[str, float],
+        breakdown: dict[str, float],
     ) -> HistoricalCase:
         """
         Convert an internal candidate and score into an immutable HistoricalCase contract.
@@ -486,9 +496,9 @@ class HistoricalRetriever:
 
 def retrieve_historical_cases(
     context: CustomerRecoveryContext,
-    db_session: Optional[Session] = None,
+    db_session: Session | None = None,
     top_k: int = 5,
-) -> List[HistoricalCase]:
+) -> list[HistoricalCase]:
     """
     Public entrypoint function for retrieving relevant historical recovery cases.
     """

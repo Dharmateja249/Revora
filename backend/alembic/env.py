@@ -1,19 +1,18 @@
-import os
 import sys
 from logging.config import fileConfig
 from pathlib import Path
 
-from sqlalchemy import engine_from_config, pool
 from alembic import context
+from sqlalchemy import engine_from_config, pool
 
 # Ensure backend directory is on sys.path
 backend_dir = Path(__file__).resolve().parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
+import app.models  # noqa: F401 - ensure models are imported
 from app.config import get_settings
 from app.database import Base
-import app.models  # noqa: F401 - ensure models are imported
 
 config = context.config
 

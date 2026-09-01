@@ -2,30 +2,37 @@
 Integration tests for Policy Subsystem across Decision Engine, Recovery Service, and API Router.
 """
 
-from datetime import datetime, timezone
 import uuid
+from datetime import datetime, timezone
+
 import pytest
+from app.database import Base, get_db
+from app.decision_engine import RecoveryAction
+from app.historical_retrieval import HistoricalCase
+from app.main import app
+from app.models import (
+    AuditEvent,
+    Customer,
+    Payment,
+    RecoveryAttempt,
+    RecoveryOpportunity,
+)
+from app.policies.registry import DEFAULT_POLICY_VERSION
+from app.recovery_service import RecoveryService
+from app.schemas.recovery import RecoveryEvaluationRequest
 from fastapi import status
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-
-from app.database import Base, get_db
-from app.decision_engine import DecisionEngine, RecoveryAction
-from app.historical_retrieval import HistoricalCase
-from app.main import app
-from app.models import AuditEvent, Customer, Payment, RecoveryAttempt, RecoveryOpportunity
-from app.policies.registry import DEFAULT_POLICY_VERSION
-from app.policies.resolver import resolve_policy_context
-from app.recovery_service import RecoveryService
-from app.schemas.recovery import RecoveryEvaluationRequest
 
 
 @pytest.fixture
 def db_session(tmp_path):
     """Fixture providing an isolated SQLite database session."""
     db_file = tmp_path / "test_policy_integration.db"
-    engine = create_engine(f"sqlite:///{db_file}", connect_args={"check_same_thread": False})
+    engine = create_engine(
+        f"sqlite:///{db_file}", connect_args={"check_same_thread": False}
+    )
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     Base.metadata.create_all(bind=engine)
 
@@ -121,7 +128,7 @@ def test_customer_and_rag_proposing_prohibited_action_overridden_by_policy(
     service = RecoveryService()
 
     # Create artificial RAG cases that strongly recommend retry_payment
-    fake_rag_case = HistoricalCase(
+    HistoricalCase(
         payment_id=uuid.uuid4(),
         customer_id=customer.id,
         amount=750.0,
@@ -159,7 +166,9 @@ def test_customer_and_rag_proposing_prohibited_action_overridden_by_policy(
     assert "policy_validation" in audit.metadata_payload
 
 
-def test_api_endpoint_returns_policy_telemetry(db_session, seeded_customer_and_auth_payment):
+def test_api_endpoint_returns_policy_telemetry(
+    db_session, seeded_customer_and_auth_payment
+):
     """Verify POST /v1/recovery/evaluate-decision HTTP endpoint returns policy metadata."""
     customer, curr_payment, _ = seeded_customer_and_auth_payment
 
