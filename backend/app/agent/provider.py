@@ -5,7 +5,7 @@ Defines the decoupled, provider-agnostic protocol for executing chat messages
 and returning structured LLMRecoveryRecommendation contracts.
 """
 
-from typing import Any, List, Mapping, Optional, Protocol, Sequence, runtime_checkable
+from typing import Any, Dict, List, Mapping, Optional, Protocol, Sequence, runtime_checkable
 
 from app.agent.schemas import LLMRecoveryRecommendation
 
@@ -111,7 +111,7 @@ class MockLLMProvider:
         self,
         recommendation: LLMRecoveryRecommendation,
         should_fail: bool = False,
-        failure_exception: Optional[Exception] = None,
+        failure_exception: Optional[LLMProviderError] = None,
         record_messages: bool = True,
     ):
         """
@@ -120,13 +120,19 @@ class MockLLMProvider:
         Args:
             recommendation: Validated LLMRecoveryRecommendation to return.
             should_fail: If True, raises LLMProviderError during generate().
-            failure_exception: Optional custom exception to raise if should_fail is True.
+            failure_exception: Optional custom LLMProviderError to raise if should_fail is True.
             record_messages: If True, stores received message sequences in recorded_messages.
         """
         if not isinstance(recommendation, LLMRecoveryRecommendation):
             raise TypeError(
                 f"Expected recommendation to be an instance of LLMRecoveryRecommendation, "
                 f"got {type(recommendation).__name__}"
+            )
+
+        if failure_exception is not None and not isinstance(failure_exception, LLMProviderError):
+            raise TypeError(
+                f"Expected failure_exception to be an instance of LLMProviderError, "
+                f"got {type(failure_exception).__name__}"
             )
 
         self._recommendation = recommendation
@@ -141,16 +147,16 @@ class MockLLMProvider:
         return self._recommendation
 
     @property
-    def recorded_messages(self) -> List[List[Mapping[str, str]]]:
-        """Return a copy of the recorded message batches received by generate()."""
-        return [list(batch) for batch in self._recorded_messages]
+    def recorded_messages(self) -> List[List[Dict[str, str]]]:
+        """Return an independent copy of the recorded message batches received by generate()."""
+        return [[dict(m) for m in batch] for batch in self._recorded_messages]
 
     @property
-    def last_messages(self) -> Optional[List[Mapping[str, str]]]:
-        """Return the most recently received message batch, if any."""
+    def last_messages(self) -> Optional[List[Dict[str, str]]]:
+        """Return an independent copy of the most recently received message batch, if any."""
         if not self._recorded_messages:
             return None
-        return list(self._recorded_messages[-1])
+        return [dict(m) for m in self._recorded_messages[-1]]
 
     async def generate(
         self,

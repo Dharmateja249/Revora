@@ -282,3 +282,83 @@ async def test_provider_does_not_mutate_input_messages(valid_recommendation, val
     await provider.generate(valid_messages)
 
     assert valid_messages == original_messages
+
+
+@pytest.mark.anyio
+async def test_recorded_messages_mutation_isolation(valid_recommendation, valid_messages):
+    """Regression test for Finding 1: mutating returned recorded_messages does not alter internal state."""
+    provider = MockLLMProvider(recommendation=valid_recommendation, record_messages=True)
+    await provider.generate(valid_messages)
+
+    retrieved_recorded = provider.recorded_messages
+    assert len(retrieved_recorded) == 1
+    assert len(retrieved_recorded[0]) == 2
+
+    # Mutate the dictionary and list returned from property
+    retrieved_recorded[0][0]["content"] = "MUTATED_CONTENT"
+    retrieved_recorded[0].append({"role": "user", "content": "NEW_INJECTED"})
+
+    # Verify provider's internal state remains untouched
+    fresh_recorded = provider.recorded_messages
+    assert fresh_recorded[0][0]["content"] == valid_messages[0]["content"]
+    assert len(fresh_recorded[0]) == len(valid_messages)
+
+
+@pytest.mark.anyio
+async def test_last_messages_mutation_isolation(valid_recommendation, valid_messages):
+    """Regression test for Finding 1: mutating returned last_messages does not alter internal state."""
+    provider = MockLLMProvider(recommendation=valid_recommendation, record_messages=True)
+    await provider.generate(valid_messages)
+
+    retrieved_last = provider.last_messages
+    assert retrieved_last is not None
+
+    # Mutate dictionary in returned list
+    retrieved_last[0]["role"] = "MUTATED_ROLE"
+    retrieved_last.pop()
+
+    # Verify provider's internal state remains untouched
+    fresh_last = provider.last_messages
+    assert fresh_last is not None
+    assert fresh_last[0]["role"] == valid_messages[0]["role"]
+    assert len(fresh_last) == len(valid_messages)
+
+
+def test_mock_provider_rejects_non_llm_provider_error_failure_exception(valid_recommendation):
+    """Regression test for Finding 2: failure_exception must be an instance of LLMProviderError."""
+    with pytest.raises(TypeError, match="Expected failure_exception to be an instance of LLMProviderError"):
+        MockLLMProvider(
+            recommendation=valid_recommendation,
+            should_fail=True,
+            failure_exception=RuntimeError("Standard runtime error"),  # type: ignore
+        )
+
+    with pytest.raises(TypeError, match="Expected failure_exception to be an instance of LLMProviderError"):
+        MockLLMProvider(
+            recommendation=valid_recommendation,
+            should_fail=True,
+            failure_exception=ValueError("Invalid value"),  # type: ignore
+        )
+
+
+@pytest.mark.anyio
+async def test_mock_provider_accepts_valid_llm_provider_error_subclasses(valid_recommendation, valid_messages):
+    """Regression test for Finding 2: failure_exception accepts LLMProviderError and its subtypes."""
+    base_err = LLMProviderError("Base provider failure")
+    provider_base = MockLLMProvider(
+        recommendation=valid_recommendation,
+        should_fail=True,
+        failure_exception=base_err,
+    )
+    with pytest.raises(LLMProviderError, match="Base provider failure"):
+        await provider_base.generate(valid_messages)
+
+    validation_err = LLMResponseValidationError("Response schema validation failure")
+    provider_val = MockLLMProvider(
+        recommendation=valid_recommendation,
+        should_fail=True,
+        failure_exception=validation_err,
+    )
+    with pytest.raises(LLMResponseValidationError, match="Response schema validation failure"):
+        await provider_val.generate(valid_messages)
+
