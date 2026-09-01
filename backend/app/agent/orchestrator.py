@@ -205,7 +205,13 @@ class AgentOrchestrator:
         policy_context: RecoveryPolicyContext,
     ) -> RecoveryAction:
         """
-        Deterministically select a safe fallback recovery action compliant with policy.
+        Deterministically select a safe fallback recovery action strictly compliant with policy.
+
+        Enforces the invariant that the fallback action must be in allowed_actions
+        and must not be in prohibited_actions.
+
+        Raises:
+            ValueError: If no policy-compliant fallback action can be determined.
         """
         if (
             policy_context.mandatory_fallback_action is not None
@@ -214,21 +220,17 @@ class AgentOrchestrator:
         ):
             return policy_context.mandatory_fallback_action
 
-        permitted = [
+        compliant_actions = [
             a
             for a in policy_context.allowed_actions
-            if a not in policy_context.prohibited_actions and a != RecoveryAction.NO_ACTION
+            if a not in policy_context.prohibited_actions
         ]
-        if permitted:
-            return permitted[0]
+        if compliant_actions:
+            return compliant_actions[0]
 
-        if (
-            RecoveryAction.NO_ACTION in policy_context.allowed_actions
-            and RecoveryAction.NO_ACTION not in policy_context.prohibited_actions
-        ):
-            return RecoveryAction.NO_ACTION
-
-        return RecoveryAction.NO_ACTION
+        raise ValueError(
+            "Cannot establish deterministic fallback: no policy-compliant recovery action available in policy context."
+        )
 
     def _build_deterministic_fallback_result(
         self,
@@ -238,15 +240,17 @@ class AgentOrchestrator:
     ) -> AgentDecisionResult:
         """
         Construct a deterministic fallback AgentDecisionResult when provider execution fails.
+
+        Preserves privacy and security boundaries by sanitizing externally visible fallback reasons
+        and reasoning messages, ensuring no raw exception details, customer PII, or prompt data are leaked.
         """
         fallback_action = self._select_deterministic_fallback_action(policy_context)
         error_type_name = type(exception).__name__
-        safe_error_msg = str(exception) if str(exception).strip() else "Unknown provider failure"
 
         fallback_rec = LLMRecoveryRecommendation(
             recommended_action=fallback_action,
             confidence=0.0,
-            reasoning=f"Deterministic fallback triggered due to provider failure ({error_type_name}): {safe_error_msg}",
+            reasoning="Deterministic fallback triggered due to LLM provider failure.",
             key_factors=("deterministic_fallback", "provider_error"),
             referenced_case_ids=(),
         )
@@ -260,7 +264,7 @@ class AgentOrchestrator:
             provider=provider_name,
             model_name=model_name,
             is_fallback=True,
-            fallback_reason=f"Provider failure ({error_type_name}): {safe_error_msg}",
+            fallback_reason="LLM provider failure; deterministic fallback applied",
             latency_ms=latency_ms,
             evaluated_at=utc_now(),
             metadata={

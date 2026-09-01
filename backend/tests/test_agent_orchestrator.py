@@ -243,7 +243,7 @@ async def test_orchestrator_handles_provider_execution_error(
     sample_policy_context,
     valid_llm_recommendation,
 ):
-    """Verify LLMProviderError triggers deterministic fallback without raising an unhandled exception."""
+    """Verify LLMProviderError triggers deterministic fallback with sanitized reason and metadata."""
     provider = MockLLMProvider(
         recommendation=valid_llm_recommendation,
         should_fail=True,
@@ -259,15 +259,15 @@ async def test_orchestrator_handles_provider_execution_error(
     assert isinstance(result, AgentDecisionResult)
     assert result.agent_used is False
     assert result.is_fallback is True
-    assert result.fallback_reason is not None
-    assert "Remote API connection timeout" in result.fallback_reason
+    assert result.fallback_reason == "LLM provider failure; deterministic fallback applied"
     assert result.recommendation.recommended_action == RecoveryAction.PAYMENT_LINK
     assert result.recommendation.confidence == 0.0
-    assert "Deterministic fallback triggered" in result.recommendation.reasoning
-    assert "deterministic_fallback" in result.recommendation.key_factors
+    assert result.recommendation.reasoning == "Deterministic fallback triggered due to LLM provider failure."
+    assert result.recommendation.key_factors == ("deterministic_fallback", "provider_error")
     assert result.metadata["error_type"] == "LLMProviderError"
     assert result.latency_ms is not None
     assert result.latency_ms >= 0.0
+    assert "Remote API connection timeout" not in str(result.model_dump(mode="json"))
 
 
 @pytest.mark.anyio
@@ -276,7 +276,7 @@ async def test_orchestrator_handles_malformed_response_error(
     sample_policy_context,
     valid_llm_recommendation,
 ):
-    """Verify LLMResponseValidationError triggers deterministic fallback."""
+    """Verify LLMResponseValidationError triggers deterministic fallback with sanitized reason."""
     provider = MockLLMProvider(
         recommendation=valid_llm_recommendation,
         should_fail=True,
@@ -291,8 +291,10 @@ async def test_orchestrator_handles_malformed_response_error(
 
     assert result.agent_used is False
     assert result.is_fallback is True
-    assert "Response JSON could not be decoded" in result.fallback_reason
+    assert result.fallback_reason == "LLM provider failure; deterministic fallback applied"
+    assert result.recommendation.reasoning == "Deterministic fallback triggered due to LLM provider failure."
     assert result.metadata["error_type"] == "LLMResponseValidationError"
+    assert "Response JSON could not be decoded" not in str(result.model_dump(mode="json"))
 
 
 # ============================================================================
@@ -520,3 +522,161 @@ async def test_provider_failure_does_not_expose_sensitive_data(
     assert "Sensitive Customer" not in json_str
     assert "CUST_SECRET_EXT" not in json_str
     assert "PAY_SECRET_EXT" not in json_str
+
+
+@pytest.mark.anyio
+async def test_fallback_action_raises_when_no_compliant_action_available(
+    sample_customer_context,
+    valid_llm_recommendation,
+):
+    """Regression test for Finding 1: fails closed with ValueError when all allowed actions are prohibited."""
+    all_prohibited_policy = RecoveryPolicyContext(
+        provider="razorpay",
+        policy_version="2026.1",
+        applicable_rules=(),
+        allowed_actions=(RecoveryAction.RETRY_PAYMENT, RecoveryAction.NO_ACTION),
+        prohibited_actions=(RecoveryAction.RETRY_PAYMENT, RecoveryAction.NO_ACTION),
+    )
+    provider = MockLLMProvider(
+        recommendation=valid_llm_recommendation,
+        should_fail=True,
+        failure_exception=LLMProviderError("Upstream failure"),
+    )
+    orchestrator = AgentOrchestrator(provider=provider)
+
+    with pytest.raises(ValueError, match="no policy-compliant recovery action available"):
+        await orchestrator.decide(
+            context=sample_customer_context,
+            policy_context=all_prohibited_policy,
+        )
+
+
+@pytest.mark.anyio
+async def test_fallback_action_selects_first_compliant_when_allowed_contains_prohibited(
+    sample_customer_context,
+    valid_llm_recommendation,
+):
+    """Regression test for Finding 1: selects first allowed action that is not in prohibited_actions."""
+    mixed_policy = RecoveryPolicyContext(
+        provider="razorpay",
+        policy_version="2026.1",
+        applicable_rules=(),
+        allowed_actions=(
+            RecoveryAction.RETRY_PAYMENT,
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        prohibited_actions=(RecoveryAction.RETRY_PAYMENT,),
+    )
+    provider = MockLLMProvider(
+        recommendation=valid_llm_recommendation,
+        should_fail=True,
+        failure_exception=LLMProviderError("Upstream failure"),
+    )
+    orchestrator = AgentOrchestrator(provider=provider)
+
+    result = await orchestrator.decide(
+        context=sample_customer_context,
+        policy_context=mixed_policy,
+    )
+
+    assert result.is_fallback is True
+    assert result.recommendation.recommended_action == RecoveryAction.PAYMENT_LINK
+    assert result.recommendation.recommended_action not in mixed_policy.prohibited_actions
+
+
+@pytest.mark.anyio
+async def test_fallback_action_ignores_prohibited_mandatory_fallback(
+    sample_customer_context,
+    valid_llm_recommendation,
+):
+    """Regression test for Finding 1: mandatory_fallback is skipped if it is prohibited."""
+    policy_with_prohibited_mandatory = RecoveryPolicyContext(
+        provider="razorpay",
+        policy_version="2026.1",
+        applicable_rules=(),
+        allowed_actions=(RecoveryAction.RETRY_PAYMENT, RecoveryAction.PAYMENT_LINK),
+        prohibited_actions=(RecoveryAction.RETRY_PAYMENT,),
+        mandatory_fallback_action=RecoveryAction.RETRY_PAYMENT,
+    )
+    provider = MockLLMProvider(
+        recommendation=valid_llm_recommendation,
+        should_fail=True,
+        failure_exception=LLMProviderError("Upstream failure"),
+    )
+    orchestrator = AgentOrchestrator(provider=provider)
+
+    result = await orchestrator.decide(
+        context=sample_customer_context,
+        policy_context=policy_with_prohibited_mandatory,
+    )
+
+    assert result.is_fallback is True
+    assert result.recommendation.recommended_action == RecoveryAction.PAYMENT_LINK
+    assert result.recommendation.recommended_action != RecoveryAction.RETRY_PAYMENT
+
+
+@pytest.mark.anyio
+async def test_provider_failure_never_produces_prohibited_action(
+    sample_customer_context,
+    valid_llm_recommendation,
+):
+    """Regression test for Finding 1: invariant check that fallback action is never in prohibited_actions."""
+    policy = RecoveryPolicyContext(
+        provider="razorpay",
+        policy_version="2026.1",
+        applicable_rules=(),
+        allowed_actions=(RecoveryAction.WAIT_AND_RETRY, RecoveryAction.CHANGE_PAYMENT_METHOD),
+        prohibited_actions=(RecoveryAction.WAIT_AND_RETRY, RecoveryAction.RETRY_PAYMENT),
+    )
+    provider = MockLLMProvider(
+        recommendation=valid_llm_recommendation,
+        should_fail=True,
+        failure_exception=LLMProviderError("Upstream failure"),
+    )
+    orchestrator = AgentOrchestrator(provider=provider)
+
+    result = await orchestrator.decide(
+        context=sample_customer_context,
+        policy_context=policy,
+    )
+
+    assert result.recommendation.recommended_action not in policy.prohibited_actions
+    assert result.recommendation.recommended_action in policy.allowed_actions
+    assert result.recommendation.recommended_action == RecoveryAction.CHANGE_PAYMENT_METHOD
+
+
+@pytest.mark.anyio
+async def test_provider_failure_sanitizes_fake_sensitive_exception_string(
+    sample_customer_context,
+    sample_policy_context,
+    valid_llm_recommendation,
+):
+    """Regression test for Finding 2: raw sensitive provider exception strings are never exposed."""
+    secret_leak_message = "CRITICAL_LEAK: api_key=sk_live_secret123 token=abc_secret customer_cc=4111222233334444"
+    provider = MockLLMProvider(
+        recommendation=valid_llm_recommendation,
+        should_fail=True,
+        failure_exception=LLMProviderError(secret_leak_message),
+    )
+    orchestrator = AgentOrchestrator(provider=provider)
+
+    result = await orchestrator.decide(
+        context=sample_customer_context,
+        policy_context=sample_policy_context,
+    )
+
+    dumped = result.model_dump(mode="json")
+    json_str = str(dumped)
+
+    # Asserts sensitive text is NOT leaked
+    assert "CRITICAL_LEAK" not in json_str
+    assert "sk_live_secret123" not in json_str
+    assert "abc_secret" not in json_str
+    assert "4111222233334444" not in json_str
+
+    # Asserts fixed sanitized strings and safe diagnostic metadata
+    assert result.fallback_reason == "LLM provider failure; deterministic fallback applied"
+    assert result.recommendation.reasoning == "Deterministic fallback triggered due to LLM provider failure."
+    assert result.metadata["error_type"] == "LLMProviderError"
+
