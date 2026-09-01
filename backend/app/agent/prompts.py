@@ -49,6 +49,11 @@ def build_agent_messages(
             f"Expected AgentDecisionPromptContext, got {type(prompt_context).__name__}"
         )
 
+    if not prompt_context.allowed_actions:
+        raise ValueError(
+            "AgentDecisionPromptContext must contain at least one allowed action"
+        )
+
     context_dict = prompt_context.model_dump(mode="json")
     user_payload_dict = {
         "current_payment": context_dict.get("current_payment", {}),

@@ -46,13 +46,19 @@ class AgentContextBuilder:
         Args:
             context: Top-level CustomerRecoveryContext from context retrieval engine.
             historical_cases: Optional sequence of retrieved historical recovery cases.
-            policy_context: Optional resolved RecoveryPolicyContext.
+            policy_context: Mandatory resolved RecoveryPolicyContext.
 
         Returns:
             Immutable AgentDecisionPromptContext safe for LLM prompt generation.
         """
         if not isinstance(context, CustomerRecoveryContext):
             raise TypeError(f"Expected CustomerRecoveryContext, got {type(context).__name__}")
+
+        if policy_context is None:
+            raise ValueError("policy_context is required for agent prompt generation")
+
+        if not isinstance(policy_context, RecoveryPolicyContext):
+            raise TypeError(f"Expected RecoveryPolicyContext, got {type(policy_context).__name__}")
 
         current_payment_payload = self._build_payment_context(context.current_payment)
         customer_profile_payload = self._build_customer_profile(
@@ -168,7 +174,8 @@ class AgentContextBuilder:
     ) -> List[Dict[str, Any]]:
         """
         Sort, cap, and format historical RAG evidence.
-        Applies relevance score DESC with case_id ASC tie-breaker.
+        Applies relevance score DESC with payment_id ASC as internal tie-breaker.
+        Emits anonymous case_N tokens rather than internal payment UUIDs.
         Excludes customer_id, raw metadata, and internal database references.
         """
         if not cases:
@@ -185,10 +192,10 @@ class AgentContextBuilder:
 
         capped_cases = sorted_cases[: self.max_historical_cases]
         payload = []
-        for case in capped_cases:
+        for idx, case in enumerate(capped_cases):
             payload.append(
                 {
-                    "case_id": str(case.payment_id),
+                    "case_id": f"case_{idx + 1}",
                     "amount": float(case.amount),
                     "currency": str(case.currency),
                     "payment_method": str(case.payment_method),
@@ -204,18 +211,18 @@ class AgentContextBuilder:
 
     def _build_policy_boundary(
         self,
-        policy_context: Optional[RecoveryPolicyContext],
+        policy_context: RecoveryPolicyContext,
     ) -> Tuple[List[str], List[str], Optional[str], List[str]]:
         """
         Transform active policy envelope into sanitized string collections.
         Extracts allowed actions, prohibited actions, mandatory fallback, and rule descriptions.
         """
-        if policy_context is None:
-            return [], [], None, []
-
         allowed = sorted(
             [a.value if isinstance(a, RecoveryAction) else str(a) for a in policy_context.allowed_actions]
         )
+        if not allowed:
+            raise ValueError("policy_context must contain at least one allowed action")
+
         prohibited = sorted(
             [a.value if isinstance(a, RecoveryAction) else str(a) for a in policy_context.prohibited_actions]
         )

@@ -42,7 +42,7 @@ def sample_prompt_context():
         ],
         historical_cases=[
             {
-                "case_id": "00000000-0000-0000-0000-000000000001",
+                "case_id": "case_1",
                 "amount": 750.0,
                 "currency": "INR",
                 "payment_method": "card",
@@ -147,3 +147,101 @@ def test_invalid_prompt_context_type_raises_type_error():
     """Verify TypeError when invalid object passed to build_agent_messages."""
     with pytest.raises(TypeError, match="Expected AgentDecisionPromptContext"):
         build_agent_messages({"not": "a context"})  # type: ignore
+
+
+def test_prompt_does_not_contain_pii_or_payment_ids(sample_prompt_context):
+    """Verify generated messages contain anonymous case tokens and no raw UUIDs or PII."""
+    messages = build_agent_messages(sample_prompt_context)
+    user_content = messages[1]["content"]
+
+    assert "case_1" in user_content
+    # Ensure no raw database UUIDs or PII substrings are present
+    assert "00000000-0000-0000-0000-000000000001" not in user_content
+    assert "@" not in user_content
+
+
+def test_build_agent_messages_rejects_empty_allowed_actions():
+    """Regression test for Finding 2: build_agent_messages rejects prompt context with empty allowed_actions."""
+    empty_allowed_ctx = AgentDecisionPromptContext(
+        current_payment={"amount": 500.0, "currency": "INR"},
+        customer_profile={"historical_success_rate": 0.8},
+        allowed_actions=[],
+    )
+    with pytest.raises(ValueError, match="at least one allowed action"):
+        build_agent_messages(empty_allowed_ctx)
+
+
+def test_prompt_serialization_regression_for_historical_payment_ids():
+    """Regression test for Finding 1: Historical payment UUIDs and customer UUIDs are never serialized in prompt."""
+    import uuid
+    from datetime import datetime, timezone
+    from app.agent.context_builder import AgentContextBuilder
+    from app.context import CustomerContext, CustomerRecoveryContext, PaymentContext
+    from app.decision_engine import RecoveryAction
+    from app.historical_retrieval import HistoricalCase
+    from app.policies.schemas import RecoveryPolicyContext
+
+    raw_payment_uuid = uuid.UUID("11111111-2222-3333-4444-555555555555")
+    raw_customer_uuid = uuid.UUID("99999999-8888-7777-6666-555555555555")
+
+    context = CustomerRecoveryContext(
+        customer=CustomerContext(
+            customer_id=uuid.uuid4(),
+            name="Confidential Name",
+            email="confidential@example.com",
+        ),
+        current_payment=PaymentContext(
+            payment_id=uuid.uuid4(),
+            amount=1200.0,
+            currency="INR",
+            payment_method="card",
+            status="failed",
+            failure_reason="authentication_failed",
+            created_at=datetime.now(timezone.utc),
+        ),
+        current_opportunity=None,
+    )
+
+    hist_case = HistoricalCase(
+        payment_id=raw_payment_uuid,
+        customer_id=raw_customer_uuid,
+        external_payment_id="LEAK_EXT_PAYMENT_123",
+        external_customer_id="LEAK_EXT_CUST_123",
+        amount=1200.0,
+        currency="INR",
+        payment_method="card",
+        failure_reason="authentication_failed",
+        recovery_action="payment_link",
+        recovery_status="recovered",
+        amount_recovered=1200.0,
+        was_recovered=True,
+        relevance_score=0.98,
+        metadata={"private_key": "leak_secret"},
+    )
+
+    policy_ctx = RecoveryPolicyContext(
+        provider="razorpay",
+        policy_version="2026.1",
+        applicable_rules=(),
+        allowed_actions=(RecoveryAction.PAYMENT_LINK,),
+    )
+
+    builder = AgentContextBuilder()
+    prompt_ctx = builder.build_prompt_context(
+        context=context,
+        historical_cases=[hist_case],
+        policy_context=policy_ctx,
+    )
+
+    messages = build_agent_messages(prompt_ctx)
+    user_prompt = messages[1]["content"]
+
+    assert str(raw_payment_uuid) not in user_prompt
+    assert str(raw_customer_uuid) not in user_prompt
+    assert "LEAK_EXT_PAYMENT_123" not in user_prompt
+    assert "LEAK_EXT_CUST_123" not in user_prompt
+    assert "leak_secret" not in user_prompt
+    assert "Confidential Name" not in user_prompt
+    assert "confidential@example.com" not in user_prompt
+    assert "case_1" in user_prompt
+

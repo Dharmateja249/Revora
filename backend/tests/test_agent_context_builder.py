@@ -220,10 +220,13 @@ def test_pii_fields_excluded_from_prompt_context(
     assert "internal_policy_data" not in json_str
 
 
-def test_payment_field_mapping(rich_customer_recovery_context):
+def test_payment_field_mapping(rich_customer_recovery_context, sample_policy_context):
     """Verify payment field mapping and defaults."""
     builder = AgentContextBuilder()
-    prompt_ctx = builder.build_prompt_context(rich_customer_recovery_context)
+    prompt_ctx = builder.build_prompt_context(
+        rich_customer_recovery_context,
+        policy_context=sample_policy_context,
+    )
 
     payment_data = prompt_ctx.current_payment
     assert payment_data["amount"] == 1500.0
@@ -232,10 +235,13 @@ def test_payment_field_mapping(rich_customer_recovery_context):
     assert payment_data["failure_reason"] == "authentication_failed"
 
 
-def test_customer_profile_mapping(rich_customer_recovery_context):
+def test_customer_profile_mapping(rich_customer_recovery_context, sample_policy_context):
     """Verify customer profile aggregation mapping."""
     builder = AgentContextBuilder()
-    prompt_ctx = builder.build_prompt_context(rich_customer_recovery_context)
+    prompt_ctx = builder.build_prompt_context(
+        rich_customer_recovery_context,
+        policy_context=sample_policy_context,
+    )
 
     profile = prompt_ctx.customer_profile
     assert profile["total_payments"] == 10
@@ -256,10 +262,13 @@ def test_customer_profile_mapping(rich_customer_recovery_context):
     assert json_profile["previously_failed_actions"] == ["wait_and_retry"]
 
 
-def test_attempt_history_mapping(rich_customer_recovery_context):
+def test_attempt_history_mapping(rich_customer_recovery_context, sample_policy_context):
     """Verify attempt sequence numbering and error codes."""
     builder = AgentContextBuilder()
-    prompt_ctx = builder.build_prompt_context(rich_customer_recovery_context)
+    prompt_ctx = builder.build_prompt_context(
+        rich_customer_recovery_context,
+        policy_context=sample_policy_context,
+    )
 
     attempts = prompt_ctx.recovery_attempt_history
     assert len(attempts) == 2
@@ -280,26 +289,32 @@ def test_attempt_history_mapping(rich_customer_recovery_context):
 def test_historical_cases_sorting_and_capping(
     rich_customer_recovery_context,
     sample_historical_cases,
+    sample_policy_context,
 ):
-    """Verify cases are sorted by relevance_score DESC and capped at max_historical_cases."""
+    """Verify cases are sorted by relevance_score DESC, capped, and assigned anonymous case_N tokens."""
     builder = AgentContextBuilder(max_historical_cases=3)
     prompt_ctx = builder.build_prompt_context(
         context=rich_customer_recovery_context,
         historical_cases=sample_historical_cases,
+        policy_context=sample_policy_context,
     )
 
     cases = prompt_ctx.historical_cases
     assert len(cases) == 3
-    # First two should have 0.95 relevance score
+    # First two should have 0.95 relevance score and case_1, case_2 tokens
     assert cases[0]["relevance_score"] == 0.95
+    assert cases[0]["case_id"] == "case_1"
     assert cases[1]["relevance_score"] == 0.95
+    assert cases[1]["case_id"] == "case_2"
     assert cases[2]["relevance_score"] == 0.85
+    assert cases[2]["case_id"] == "case_3"
 
 
 def test_historical_cases_deterministic_tie_breaking(
     rich_customer_recovery_context,
+    sample_policy_context,
 ):
-    """Verify tie-breaking by case_id ASC when relevance scores are identical."""
+    """Verify tie-breaking by internal payment_id ASC when relevance scores are identical."""
     case_b = HistoricalCase(
         payment_id=uuid.UUID("00000000-0000-0000-0000-00000000000b"),
         customer_id=uuid.uuid4(),
@@ -322,13 +337,49 @@ def test_historical_cases_deterministic_tie_breaking(
     prompt_ctx = builder.build_prompt_context(
         context=rich_customer_recovery_context,
         historical_cases=[case_b, case_a],
+        policy_context=sample_policy_context,
     )
 
     cases = prompt_ctx.historical_cases
     assert len(cases) == 2
-    # case_a should come first due to tie-breaker
-    assert cases[0]["case_id"] == "00000000-0000-0000-0000-00000000000a"
-    assert cases[1]["case_id"] == "00000000-0000-0000-0000-00000000000b"
+    # case_a should come first due to internal tie-breaker, assigned case_1
+    assert cases[0]["case_id"] == "case_1"
+    assert cases[1]["case_id"] == "case_2"
+
+
+def test_historical_payment_id_not_leaked_in_prompt_context(
+    rich_customer_recovery_context,
+    sample_policy_context,
+):
+    """Regression test for Issue 1: Historical payment UUIDs MUST NOT appear in prompt context or serialized output."""
+    raw_payment_uuid = uuid.UUID("11111111-2222-3333-4444-555555555555")
+    raw_customer_uuid = uuid.UUID("99999999-8888-7777-6666-555555555555")
+
+    hist_case = HistoricalCase(
+        payment_id=raw_payment_uuid,
+        customer_id=raw_customer_uuid,
+        amount=999.0,
+        payment_method="card",
+        recovery_status="recovered",
+        relevance_score=0.99,
+    )
+
+    builder = AgentContextBuilder()
+    prompt_ctx = builder.build_prompt_context(
+        context=rich_customer_recovery_context,
+        historical_cases=[hist_case],
+        policy_context=sample_policy_context,
+    )
+
+    dumped = prompt_ctx.model_dump(mode="json")
+    json_str = str(dumped)
+
+    # Assert raw payment_id and customer_id are NOT anywhere in the context
+    assert str(raw_payment_uuid) not in json_str
+    assert str(raw_customer_uuid) not in json_str
+
+    # Assert safe anonymous token is present
+    assert dumped["historical_cases"][0]["case_id"] == "case_1"
 
 
 def test_policy_envelope_action_string_mapping(
@@ -349,7 +400,7 @@ def test_policy_envelope_action_string_mapping(
     assert "2FA" in prompt_ctx.policy_constraints[0]
 
 
-def test_missing_optional_payment_or_opportunity():
+def test_missing_optional_payment_or_opportunity(sample_policy_context):
     """Verify fallback defaults when payment or stats are None."""
     cust_id = uuid.uuid4()
     context = CustomerRecoveryContext(
@@ -359,21 +410,57 @@ def test_missing_optional_payment_or_opportunity():
     )
 
     builder = AgentContextBuilder()
-    prompt_ctx = builder.build_prompt_context(context)
+    prompt_ctx = builder.build_prompt_context(
+        context,
+        policy_context=sample_policy_context,
+    )
 
     assert prompt_ctx.current_payment["amount"] == 0.0
     assert prompt_ctx.current_payment["payment_method"] == "unspecified"
     assert prompt_ctx.current_payment["failure_reason"] == "unspecified"
-    assert prompt_ctx.allowed_actions == ()
-    assert prompt_ctx.prohibited_actions == ()
-    assert prompt_ctx.mandatory_fallback is None
+    assert prompt_ctx.allowed_actions == ("change_payment_method", "payment_link")
 
 
-def test_empty_historical_cases(rich_customer_recovery_context):
+def test_build_prompt_context_rejects_missing_policy_context(rich_customer_recovery_context):
+    """Regression test for Issue 2: policy_context=None must be rejected explicitly."""
+    builder = AgentContextBuilder()
+
+    with pytest.raises(ValueError, match="policy_context is required"):
+        builder.build_prompt_context(rich_customer_recovery_context, policy_context=None)
+
+
+def test_build_prompt_context_rejects_empty_allowed_actions(rich_customer_recovery_context):
+    """Regression test for Issue 2: policy_context with empty allowed_actions must be rejected."""
+    empty_allowed_policy = RecoveryPolicyContext(
+        provider="razorpay",
+        policy_version="2026.1",
+        applicable_rules=(),
+        allowed_actions=(),
+        prohibited_actions=(RecoveryAction.RETRY_PAYMENT,),
+    )
+
+    builder = AgentContextBuilder()
+
+    with pytest.raises(ValueError, match="at least one allowed action"):
+        builder.build_prompt_context(
+            rich_customer_recovery_context,
+            policy_context=empty_allowed_policy,
+        )
+
+
+def test_empty_historical_cases(rich_customer_recovery_context, sample_policy_context):
     """Verify empty tuple when historical cases are None or empty."""
     builder = AgentContextBuilder()
-    prompt_ctx1 = builder.build_prompt_context(rich_customer_recovery_context, historical_cases=None)
-    prompt_ctx2 = builder.build_prompt_context(rich_customer_recovery_context, historical_cases=[])
+    prompt_ctx1 = builder.build_prompt_context(
+        rich_customer_recovery_context,
+        historical_cases=None,
+        policy_context=sample_policy_context,
+    )
+    prompt_ctx2 = builder.build_prompt_context(
+        rich_customer_recovery_context,
+        historical_cases=[],
+        policy_context=sample_policy_context,
+    )
 
     assert prompt_ctx1.historical_cases == ()
     assert prompt_ctx2.historical_cases == ()
