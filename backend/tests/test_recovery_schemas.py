@@ -218,3 +218,95 @@ def test_response_immutability():
     )
     with pytest.raises(ValidationError):
         resp.confidence = 0.99  # type: ignore
+
+
+def test_request_use_agent_defaults_to_none():
+    """Verify use_agent in request defaults to None when omitted."""
+    req = RecoveryEvaluationRequest(
+        customer_id=uuid.uuid4(),
+        payment_id=uuid.uuid4(),
+    )
+    assert req.use_agent is None
+
+
+def test_request_use_agent_explicit_boolean_values():
+    """Verify use_agent explicitly parses True, False, and None."""
+    cust_id = uuid.uuid4()
+    pay_id = uuid.uuid4()
+
+    req_true = RecoveryEvaluationRequest(
+        customer_id=cust_id,
+        payment_id=pay_id,
+        use_agent=True,
+    )
+    assert req_true.use_agent is True
+
+    req_false = RecoveryEvaluationRequest(
+        customer_id=cust_id,
+        payment_id=pay_id,
+        use_agent=False,
+    )
+    assert req_false.use_agent is False
+
+    req_none = RecoveryEvaluationRequest(
+        customer_id=cust_id,
+        payment_id=pay_id,
+        use_agent=None,
+    )
+    assert req_none.use_agent is None
+
+
+def test_response_agent_telemetry_defaults():
+    """Verify default values for agent telemetry fields in response DTO."""
+    resp = RecoveryEvaluationResponse(
+        payment_id=uuid.uuid4(),
+        customer_id=uuid.uuid4(),
+        recommended_action=RecoveryAction.RETRY_PAYMENT,
+        reason="Default evaluation",
+        confidence=0.75,
+    )
+    assert resp.agent_used is False
+    assert resp.is_fallback is False
+    assert resp.fallback_reason is None
+
+    dumped = resp.model_dump()
+    assert dumped["agent_used"] is False
+    assert dumped["is_fallback"] is False
+    assert dumped["fallback_reason"] is None
+
+
+def test_response_agent_telemetry_explicit_values():
+    """Verify explicit values for agent telemetry fields in response DTO."""
+    resp = RecoveryEvaluationResponse(
+        payment_id=uuid.uuid4(),
+        customer_id=uuid.uuid4(),
+        recommended_action=RecoveryAction.PAYMENT_LINK,
+        reason="Deterministic fallback applied",
+        confidence=0.0,
+        agent_used=False,
+        is_fallback=True,
+        fallback_reason="LLM provider failure; deterministic fallback applied",
+    )
+    assert resp.agent_used is False
+    assert resp.is_fallback is True
+    assert resp.fallback_reason == "LLM provider failure; deterministic fallback applied"
+
+    # Verify JSON serialization round-trip
+    parsed = json.loads(resp.model_dump_json())
+    assert parsed["agent_used"] is False
+    assert parsed["is_fallback"] is True
+    assert parsed["fallback_reason"] == "LLM provider failure; deterministic fallback applied"
+
+
+def test_settings_enable_agent_decision_engine_default_and_env_override(monkeypatch):
+    """Verify Settings ENABLE_AGENT_DECISION_ENGINE defaults to False and respects env override."""
+    from app.config import Settings
+
+    # Default check
+    settings_default = Settings(_env_file=None)
+    assert settings_default.ENABLE_AGENT_DECISION_ENGINE is False
+
+    # Env override check
+    monkeypatch.setenv("ENABLE_AGENT_DECISION_ENGINE", "true")
+    settings_enabled = Settings(_env_file=None)
+    assert settings_enabled.ENABLE_AGENT_DECISION_ENGINE is True

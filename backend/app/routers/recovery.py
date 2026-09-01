@@ -10,7 +10,11 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.agent.orchestrator import AgentOrchestrator
+from app.agent.provider import MockLLMProvider
+from app.agent.schemas import LLMRecoveryRecommendation
 from app.auth import AuthenticatedPrincipal, get_current_principal
+from app.config import Settings, get_settings
 from app.context import (
     CustomerNotFoundError,
     PaymentCustomerMismatchError,
@@ -18,6 +22,7 @@ from app.context import (
     RecoveryOpportunityNotFoundError,
 )
 from app.database import get_db
+from app.decision_engine import RecoveryAction
 from app.embedding_service import EmbeddingService, get_embedding_service
 from app.recovery_service import RecoveryService
 from app.schemas.recovery import (
@@ -32,8 +37,9 @@ router = APIRouter()
 def get_recovery_service(
     vector_index: Optional[VectorIndex] = Depends(get_vector_index),
     embedding_service: Optional[EmbeddingService] = Depends(get_embedding_service),
+    settings: Optional[Settings] = Depends(get_settings),
 ) -> RecoveryService:
-    """Dependency provider for RecoveryService instance with application-scoped vector index."""
+    """Dependency provider for RecoveryService instance with application-scoped vector index and agent configuration."""
     resolved_index = (
         vector_index if isinstance(vector_index, VectorIndex) else get_vector_index()
     )
@@ -42,9 +48,28 @@ def get_recovery_service(
         if isinstance(embedding_service, EmbeddingService)
         else get_embedding_service()
     )
+    resolved_settings = (
+        settings if isinstance(settings, Settings) else get_settings()
+    )
+    use_agent = resolved_settings.ENABLE_AGENT_DECISION_ENGINE
+    agent_orchestrator: Optional[AgentOrchestrator] = None
+
+    if use_agent:
+        default_rec = LLMRecoveryRecommendation(
+            recommended_action=RecoveryAction.PAYMENT_LINK,
+            confidence=0.8,
+            reasoning="Default adaptive recovery recommendation.",
+            key_factors=("automated_recovery",),
+            referenced_case_ids=(),
+        )
+        provider = MockLLMProvider(recommendation=default_rec)
+        agent_orchestrator = AgentOrchestrator(provider=provider)
+
     return RecoveryService(
         vector_index=resolved_index,
         embedding_service=resolved_embedding,
+        agent_orchestrator=agent_orchestrator,
+        use_agent=use_agent,
     )
 
 
@@ -59,7 +84,7 @@ def get_recovery_service(
         "persists an audit event, and returns a clean recovery recommendation."
     ),
 )
-def evaluate_decision(
+async def evaluate_decision(
     request: RecoveryEvaluationRequest,
     db: Session = Depends(get_db),
     principal: AuthenticatedPrincipal = Depends(get_current_principal),
@@ -76,6 +101,8 @@ def evaluate_decision(
         )
 
     try:
+        if hasattr(recovery_service, "evaluate_recovery_async"):
+            return await recovery_service.evaluate_recovery_async(db_session=db, request=request)
         return recovery_service.evaluate_recovery(db_session=db, request=request)
     except CustomerNotFoundError as exc:
         raise HTTPException(

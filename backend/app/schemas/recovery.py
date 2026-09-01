@@ -41,6 +41,10 @@ class RecoveryEvaluationRequest(BaseModel):
         default=True,
         description="Whether to retrieve and incorporate empirical historical RAG evidence.",
     )
+    use_agent: Optional[bool] = Field(
+        default=None,
+        description="Explicitly enable/disable agent decision engine. If None, uses service default.",
+    )
 
 
 class RecoveryEvaluationResponse(BaseModel):
@@ -122,6 +126,18 @@ class RecoveryEvaluationResponse(BaseModel):
     policy_overridden: bool = Field(
         default=False,
         description="Flag indicating if the candidate action was overridden by policy validation.",
+    )
+    agent_used: bool = Field(
+        default=False,
+        description="Flag indicating if the agent decision pipeline was utilized.",
+    )
+    is_fallback: bool = Field(
+        default=False,
+        description="Flag indicating if deterministic fallback was applied.",
+    )
+    fallback_reason: Optional[str] = Field(
+        default=None,
+        description="Sanitized reason for applying fallback, if applicable.",
     )
     evaluated_at: datetime = Field(
         default_factory=utc_now,

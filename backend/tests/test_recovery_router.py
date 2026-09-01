@@ -520,3 +520,116 @@ def test_openapi_schema_contains_recovery_endpoint(client):
 
     assert "Recovery" in recovery_post.get("tags", [])
     assert recovery_post.get("summary") == "Evaluate Failed Payment Recovery Decision"
+
+
+# ============================================================================
+# 8. Stage 5.3 Router Agent Dependency Injection Tests
+# ============================================================================
+
+
+def test_get_recovery_service_disabled_by_configuration():
+    """Verify get_recovery_service constructs deterministic service when ENABLE_AGENT_DECISION_ENGINE is False."""
+    from app.config import Settings
+    settings = Settings(ENABLE_AGENT_DECISION_ENGINE=False, _env_file=None)
+    service = get_recovery_service(settings=settings)
+
+    assert service.use_agent is False
+    assert service.agent_orchestrator is None
+
+
+def test_get_recovery_service_enabled_by_configuration():
+    """Verify get_recovery_service constructs AgentOrchestrator when ENABLE_AGENT_DECISION_ENGINE is True."""
+    from app.config import Settings
+    settings = Settings(ENABLE_AGENT_DECISION_ENGINE=True, _env_file=None)
+    service = get_recovery_service(settings=settings)
+
+    assert service.use_agent is True
+    assert service.agent_orchestrator is not None
+
+
+def test_router_agent_enabled_via_app_settings(client, test_db_session):
+    """Verify POST /v1/recovery/evaluate-decision executes agent path when ENABLE_AGENT_DECISION_ENGINE is True."""
+    from app.config import Settings, get_settings
+
+    customer, payment, opportunity = _seed_customer_payment_opportunity(test_db_session)
+
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        ENABLE_AGENT_DECISION_ENGINE=True, _env_file=None
+    )
+
+    payload = {
+        "customer_id": str(customer.id),
+        "payment_id": str(payment.id),
+        "use_rag": False,
+    }
+    headers = {"Authorization": f"Bearer {customer.id}"}
+
+    resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
+    assert resp.status_code == status.HTTP_200_OK
+    data = resp.json()
+    assert data["agent_used"] is True
+    assert data["is_fallback"] is False
+    assert data["recommended_action"] == "payment_link"
+
+
+def test_router_request_level_use_agent_false_overrides_enabled_service(client, test_db_session):
+    """Verify request.use_agent=False overrides service-level agent enablement to run deterministic engine."""
+    from app.config import Settings, get_settings
+
+    customer, payment, opportunity = _seed_customer_payment_opportunity(test_db_session)
+
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        ENABLE_AGENT_DECISION_ENGINE=True, _env_file=None
+    )
+
+    payload = {
+        "customer_id": str(customer.id),
+        "payment_id": str(payment.id),
+        "use_rag": False,
+        "use_agent": False,
+    }
+    headers = {"Authorization": f"Bearer {customer.id}"}
+
+    resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
+    assert resp.status_code == status.HTTP_200_OK
+    data = resp.json()
+    assert data["agent_used"] is False
+    assert data["is_fallback"] is False
+
+
+def test_router_custom_orchestrator_dependency_injection(client, test_db_session):
+    """Verify custom AgentOrchestrator injected via get_recovery_service override."""
+    from app.agent.orchestrator import AgentOrchestrator
+    from app.agent.provider import MockLLMProvider
+    from app.agent.schemas import LLMRecoveryRecommendation
+
+    customer, payment, opportunity = _seed_customer_payment_opportunity(test_db_session)
+
+    custom_rec = LLMRecoveryRecommendation(
+        recommended_action=RecoveryAction.CHANGE_PAYMENT_METHOD,
+        confidence=0.95,
+        reasoning="Custom injected orchestrator recommendation.",
+        key_factors=("custom_factor",),
+        referenced_case_ids=(),
+    )
+    custom_orchestrator = AgentOrchestrator(provider=MockLLMProvider(recommendation=custom_rec))
+
+    app.dependency_overrides[get_recovery_service] = lambda: RecoveryService(
+        agent_orchestrator=custom_orchestrator,
+        use_agent=True,
+    )
+
+    payload = {
+        "customer_id": str(customer.id),
+        "payment_id": str(payment.id),
+        "use_rag": False,
+    }
+    headers = {"Authorization": f"Bearer {customer.id}"}
+
+    resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
+    assert resp.status_code == status.HTTP_200_OK
+    data = resp.json()
+    assert data["agent_used"] is True
+    assert data["recommended_action"] == "change_payment_method"
+    assert data["confidence"] == 0.95
+    assert data["reason"] == "Custom injected orchestrator recommendation."

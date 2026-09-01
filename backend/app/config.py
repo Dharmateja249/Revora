@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     APP_VERSION: str = "0.1.0"
     DEBUG: bool = False
     DATABASE_URL: str = "sqlite:///./revora.db"
+    ENABLE_AGENT_DECISION_ENGINE: bool = False
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
