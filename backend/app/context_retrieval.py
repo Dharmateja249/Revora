@@ -5,7 +5,6 @@ Retrieves and aggregates structured historical context from the relational datab
 for failed payment recovery evaluation, returning an immutable CustomerRecoveryContext.
 """
 
-from typing import Optional, Set, Union
 import uuid
 
 from sqlalchemy import or_, select
@@ -29,7 +28,7 @@ from app.models import Customer, Payment, RecoveryOpportunity
 
 def _resolve_customer(
     db_session: Session,
-    customer_id: Union[uuid.UUID, str],
+    customer_id: uuid.UUID | str,
 ) -> Customer:
     """
     Resolve a Customer model by internal UUID or external_customer_id.
@@ -50,7 +49,9 @@ def _resolve_customer(
                 )
             )
         except ValueError:
-            stmt = select(Customer).where(Customer.external_customer_id == str(customer_id))
+            stmt = select(Customer).where(
+                Customer.external_customer_id == str(customer_id)
+            )
 
     customer = db_session.execute(stmt).scalars().first()
     if customer is None:
@@ -60,7 +61,7 @@ def _resolve_customer(
 
 def _resolve_payment(
     db_session: Session,
-    payment_id: Union[uuid.UUID, str],
+    payment_id: uuid.UUID | str,
 ) -> Payment:
     """
     Resolve a Payment model by internal UUID or external_payment_id,
@@ -70,7 +71,9 @@ def _resolve_payment(
         PaymentNotFoundError: If no payment matches the identifier.
     """
     options = [
-        selectinload(Payment.recovery_opportunity).selectinload(RecoveryOpportunity.attempts)
+        selectinload(Payment.recovery_opportunity).selectinload(
+            RecoveryOpportunity.attempts
+        )
     ]
 
     if isinstance(payment_id, uuid.UUID):
@@ -103,9 +106,9 @@ def _resolve_payment(
 
 def get_customer_context(
     db_session: Session,
-    customer_id: Union[uuid.UUID, str],
-    payment_id: Union[uuid.UUID, str],
-    history_limit: Optional[int] = None,
+    customer_id: uuid.UUID | str,
+    payment_id: uuid.UUID | str,
+    history_limit: int | None = None,
 ) -> CustomerRecoveryContext:
     """
     Retrieve and assemble the complete deterministic context for a customer's failed payment.
@@ -172,7 +175,9 @@ def get_customer_context(
     hist_stmt = (
         select(Payment)
         .options(
-            selectinload(Payment.recovery_opportunity).selectinload(RecoveryOpportunity.attempts)
+            selectinload(Payment.recovery_opportunity).selectinload(
+                RecoveryOpportunity.attempts
+            )
         )
         .where(
             Payment.customer_id == customer.id,
@@ -191,14 +196,14 @@ def get_customer_context(
     recovered_opportunities = 0
     failed_opportunities = 0
     total_amount_recovered = 0.0
-    successful_actions: Set[str] = set()
-    failed_actions: Set[str] = set()
+    successful_actions: set[str] = set()
+    failed_actions: set[str] = set()
 
     historical_payment_contexts = []
     for hist_p in historical_payments_raw:
         hist_opp = hist_p.recovery_opportunity
         was_recovered = False
-        recovery_action: Optional[str] = None
+        recovery_action: str | None = None
         attempts_count = 0
 
         if hist_opp is not None:
@@ -206,7 +211,9 @@ def get_customer_context(
             if hist_opp.status == "recovered":
                 recovered_opportunities += 1
                 was_recovered = True
-            elif hist_opp.status in ("failed", "abandoned") or hist_p.status == "failed":
+            elif (
+                hist_opp.status in ("failed", "abandoned") or hist_p.status == "failed"
+            ):
                 failed_opportunities += 1
 
             if hist_opp.attempts:
@@ -252,8 +259,8 @@ def get_customer_context(
         recovered_opportunities=recovered_opportunities,
         failed_opportunities=failed_opportunities,
         recovery_rate=recovery_rate,
-        previously_successful_actions=sorted(list(successful_actions)),
-        previously_failed_actions=sorted(list(failed_actions)),
+        previously_successful_actions=sorted(successful_actions),
+        previously_failed_actions=sorted(failed_actions),
         total_amount_recovered=total_amount_recovered,
     )
 

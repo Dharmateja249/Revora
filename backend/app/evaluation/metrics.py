@@ -7,7 +7,7 @@ graded relevance judgments.
 """
 
 import math
-from typing import Dict, Sequence, Set
+from collections.abc import Sequence
 from uuid import UUID
 
 from app.evaluation.schemas import GroundTruthJudgment
@@ -24,7 +24,7 @@ def _validate_k(k: int) -> int:
 
 def _validate_and_index_ground_truth(
     ground_truth: Sequence[GroundTruthJudgment],
-) -> Dict[UUID, int]:
+) -> dict[UUID, int]:
     """
     Validate ground truth sequence and return mapping of payment_id -> relevance_grade.
 
@@ -37,14 +37,16 @@ def _validate_and_index_ground_truth(
             f"ground_truth must be a sequence of GroundTruthJudgment instances, got {type(ground_truth).__name__}"
         )
 
-    gt_map: Dict[UUID, int] = {}
+    gt_map: dict[UUID, int] = {}
     for idx, j in enumerate(ground_truth):
         if not isinstance(j, GroundTruthJudgment):
             raise TypeError(
                 f"Item at index {idx} in ground_truth must be GroundTruthJudgment, got {type(j).__name__}"
             )
         if j.payment_id in gt_map:
-            raise ValueError(f"Duplicate payment_id '{j.payment_id}' found in ground_truth judgments.")
+            raise ValueError(
+                f"Duplicate payment_id '{j.payment_id}' found in ground_truth judgments."
+            )
         gt_map[j.payment_id] = j.relevance_grade
 
     return gt_map
@@ -65,7 +67,7 @@ def _validate_retrieved_payment_ids(
             f"retrieved_payment_ids must be a sequence of UUIDs, got {type(retrieved_payment_ids).__name__}"
         )
 
-    seen: Set[UUID] = set()
+    seen: set[UUID] = set()
     for idx, pid in enumerate(retrieved_payment_ids):
         if not isinstance(pid, UUID):
             raise TypeError(
@@ -110,9 +112,7 @@ def precision_at_k(
         return 0.0
 
     retrieved_k = retrieved_payment_ids[:k]
-    relevant_retrieved_count = sum(
-        1 for pid in retrieved_k if gt_map.get(pid, 0) > 0
-    )
+    relevant_retrieved_count = sum(1 for pid in retrieved_k if gt_map.get(pid, 0) > 0)
 
     return float(relevant_retrieved_count / k)
 
@@ -152,9 +152,7 @@ def recall_at_k(
         return 0.0
 
     retrieved_k = retrieved_payment_ids[:k]
-    relevant_retrieved_count = sum(
-        1 for pid in retrieved_k if gt_map.get(pid, 0) > 0
-    )
+    relevant_retrieved_count = sum(1 for pid in retrieved_k if gt_map.get(pid, 0) > 0)
 
     return float(relevant_retrieved_count / total_relevant_in_gt)
 
@@ -226,7 +224,7 @@ def ndcg_at_k(
     idcg = 0.0
     for rank_1_based, grade in enumerate(sorted_ideal_grades, start=1):
         if grade > 0:
-            gain = (2.0 ** grade) - 1.0
+            gain = (2.0**grade) - 1.0
             discount = math.log2(rank_1_based + 1.0)
             idcg += gain / discount
 
@@ -239,7 +237,7 @@ def ndcg_at_k(
     for rank_1_based, pid in enumerate(retrieved_k, start=1):
         grade = gt_map.get(pid, 0)
         if grade > 0:
-            gain = (2.0 ** grade) - 1.0
+            gain = (2.0**grade) - 1.0
             discount = math.log2(rank_1_based + 1.0)
             dcg += gain / discount
 

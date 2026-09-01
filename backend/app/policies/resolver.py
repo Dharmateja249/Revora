@@ -5,19 +5,18 @@ Deterministically resolves the applicable PolicyRule set and computes the immuta
 RecoveryPolicyContext envelope for a given CustomerRecoveryContext.
 """
 
-from typing import List, Optional, Set, Tuple
-
 from app.context import CustomerRecoveryContext
 from app.decision_engine import RecoveryAction
 from app.policies.registry import (
-    DEFAULT_POLICY_VERSION,
     PolicyRegistry,
     get_policy_registry,
 )
 from app.policies.schemas import PolicyRule, PolicyType, RecoveryPolicyContext
 
 
-def _matches_failure_reason(rule_reasons: Tuple[str, ...], failure_reason: Optional[str]) -> bool:
+def _matches_failure_reason(
+    rule_reasons: tuple[str, ...], failure_reason: str | None
+) -> bool:
     """Check if failure reason matches any pattern defined in the rule."""
     if not rule_reasons:
         return False
@@ -29,7 +28,9 @@ def _matches_failure_reason(rule_reasons: Tuple[str, ...], failure_reason: Optio
     return any(term in clean_reason for term in rule_reasons)
 
 
-def _matches_payment_method(rule_methods: Tuple[str, ...], payment_method: Optional[str]) -> bool:
+def _matches_payment_method(
+    rule_methods: tuple[str, ...], payment_method: str | None
+) -> bool:
     """Check if payment method matches any pattern defined in the rule."""
     if not rule_methods:
         return True  # Empty means all methods applicable
@@ -42,7 +43,7 @@ def _matches_payment_method(rule_methods: Tuple[str, ...], payment_method: Optio
 def resolve_policy_context(
     context: CustomerRecoveryContext,
     provider: str = "razorpay",
-    registry: Optional[PolicyRegistry] = None,
+    registry: PolicyRegistry | None = None,
     max_attempts: int = 3,
 ) -> RecoveryPolicyContext:
     """
@@ -59,7 +60,9 @@ def resolve_policy_context(
         and mandatory fallback action.
     """
     if not isinstance(context, CustomerRecoveryContext):
-        raise TypeError(f"Expected CustomerRecoveryContext, got {type(context).__name__}")
+        raise TypeError(
+            f"Expected CustomerRecoveryContext, got {type(context).__name__}"
+        )
 
     reg = registry or get_policy_registry()
 
@@ -68,7 +71,7 @@ def resolve_policy_context(
     raw_attempts = context.current_payment_attempts or []
     attempt_count = len(raw_attempts)
 
-    applicable_rules: List[PolicyRule] = []
+    applicable_rules: list[PolicyRule] = []
 
     # =========================================================================
     # Phase 1: Safety Invariant Checks (Priority = 1000)
@@ -93,7 +96,10 @@ def resolve_policy_context(
             metadata={"resolved_by": "SafetyNoActiveOpportunity"},
         )
 
-    if current_opportunity.status == "recovered" or current_payment.status == "succeeded":
+    if (
+        current_opportunity.status == "recovered"
+        or current_payment.status == "succeeded"
+    ):
         recovered_rule = reg.get_rule("SAFETY_ALREADY_RECOVERED")
         if recovered_rule:
             applicable_rules.append(recovered_rule)
@@ -112,7 +118,10 @@ def resolve_policy_context(
             metadata={"resolved_by": "SafetyAlreadyRecovered"},
         )
 
-    if attempt_count >= max_attempts or current_opportunity.status in ("failed", "abandoned"):
+    if attempt_count >= max_attempts or current_opportunity.status in (
+        "failed",
+        "abandoned",
+    ):
         max_attempts_rule = reg.get_rule("SAFETY_MAX_ATTEMPTS_EXCEEDED")
         if max_attempts_rule:
             applicable_rules.append(max_attempts_rule)
@@ -140,16 +149,18 @@ def resolve_policy_context(
 
     # Check all registered rules
     all_registered = reg.list_rules()
-    domain_rules_matched: List[PolicyRule] = []
+    domain_rules_matched: list[PolicyRule] = []
 
     for rule in all_registered:
         if rule.policy_type == PolicyType.SAFETY:
             continue  # Safety already evaluated in Phase 1
 
-        if rule.applicable_failure_reasons:
-            if _matches_failure_reason(rule.applicable_failure_reasons, failure_reason):
-                if _matches_payment_method(rule.applicable_payment_methods, payment_method):
-                    domain_rules_matched.append(rule)
+        if (
+            rule.applicable_failure_reasons
+            and _matches_failure_reason(rule.applicable_failure_reasons, failure_reason)
+            and _matches_payment_method(rule.applicable_payment_methods, payment_method)
+        ):
+            domain_rules_matched.append(rule)
 
     if not domain_rules_matched:
         # Fallback to default safe envelope
@@ -167,23 +178,29 @@ def resolve_policy_context(
     # =========================================================================
 
     # 1. Accumulate all prohibited actions across all matched rules
-    all_prohibited: Set[RecoveryAction] = set()
+    all_prohibited: set[RecoveryAction] = set()
     for rule in applicable_rules:
         all_prohibited.update(rule.prohibited_actions)
 
     # 2. Determine allowed actions from the highest-priority matching rule
     primary_rule = applicable_rules[0]
-    candidate_allowed: List[RecoveryAction] = [
+    candidate_allowed: list[RecoveryAction] = [
         act for act in primary_rule.allowed_actions if act not in all_prohibited
     ]
 
     # Always ensure NO_ACTION is available if no recovery actions are possible
-    if RecoveryAction.NO_ACTION not in candidate_allowed and RecoveryAction.NO_ACTION not in all_prohibited:
+    if (
+        RecoveryAction.NO_ACTION not in candidate_allowed
+        and RecoveryAction.NO_ACTION not in all_prohibited
+    ):
         candidate_allowed.append(RecoveryAction.NO_ACTION)
 
     # 3. Determine mandatory fallback
-    mandatory_fallback: Optional[RecoveryAction] = None
-    if primary_rule.mandatory_fallback and primary_rule.mandatory_fallback not in all_prohibited:
+    mandatory_fallback: RecoveryAction | None = None
+    if (
+        primary_rule.mandatory_fallback
+        and primary_rule.mandatory_fallback not in all_prohibited
+    ):
         mandatory_fallback = primary_rule.mandatory_fallback
     elif candidate_allowed:
         # Pick first non-NO_ACTION allowed action if available, else NO_ACTION
@@ -199,7 +216,7 @@ def resolve_policy_context(
         policy_version=reg.version,
         applicable_rules=tuple(applicable_rules),
         allowed_actions=tuple(candidate_allowed),
-        prohibited_actions=tuple(sorted(list(all_prohibited), key=lambda a: a.value)),
+        prohibited_actions=tuple(sorted(all_prohibited, key=lambda a: a.value)),
         mandatory_fallback_action=mandatory_fallback,
         metadata={
             "primary_rule_id": primary_rule.policy_id,

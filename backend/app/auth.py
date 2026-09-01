@@ -5,7 +5,6 @@ Provides a clean, decoupled authentication dependency boundary for FastAPI endpo
 Validates incoming credentials and provides the AuthenticatedPrincipal identity.
 """
 
-from typing import Optional
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
@@ -27,7 +26,7 @@ class AuthenticatedPrincipal(BaseModel):
 
 
 def get_current_principal(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_bearer),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security_bearer),  # noqa: B008
 ) -> AuthenticatedPrincipal:
     """
     FastAPI dependency that extracts and validates the authenticated principal from Bearer token.

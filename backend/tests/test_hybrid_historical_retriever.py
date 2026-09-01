@@ -18,11 +18,11 @@ Tests:
 14. End-to-end integration test with real HistoricalRetriever & SemanticHistoricalRetriever
 """
 
-from datetime import datetime, timezone, timedelta
 import math
 import uuid
-import pytest
+from datetime import datetime, timedelta, timezone
 
+import pytest
 from app.context import (
     CustomerContext,
     CustomerRecoveryContext,
@@ -42,7 +42,6 @@ from app.hybrid_historical_retriever import (
 from app.retrieval_document import historical_case_to_document
 from app.semantic_historical_retriever import SemanticHistoricalRetriever
 from app.vector_index import VectorIndex
-
 
 # ============================================================================
 # 1. RRF Formula & Score Calculation
@@ -81,7 +80,14 @@ class MockRetriever:
         return self.cases[:top_k]
 
 
-def _create_case(pid: uuid.UUID, cid: uuid.UUID, amount: float, method: str, reason: str, rel_score: float = 0.5):
+def _create_case(
+    pid: uuid.UUID,
+    cid: uuid.UUID,
+    amount: float,
+    method: str,
+    reason: str,
+    rel_score: float = 0.5,
+):
     return HistoricalCase(
         payment_id=pid,
         customer_id=cid,
@@ -124,7 +130,12 @@ def test_case_ranked_highly_in_both_achieves_top_fused_rank():
 
     context = CustomerRecoveryContext(
         customer=CustomerContext(customer_id=cid),
-        current_payment=PaymentContext(payment_id=uuid.uuid4(), amount=1000.0, payment_method="card", status="failed"),
+        current_payment=PaymentContext(
+            payment_id=uuid.uuid4(),
+            amount=1000.0,
+            payment_method="card",
+            status="failed",
+        ),
     )
 
     results = hybrid.retrieve_relevant_cases(context, top_k=5)
@@ -162,7 +173,12 @@ def test_unilateral_cases_handled_correctly():
 
     context = CustomerRecoveryContext(
         customer=CustomerContext(customer_id=cid),
-        current_payment=PaymentContext(payment_id=uuid.uuid4(), amount=1000.0, payment_method="card", status="failed"),
+        current_payment=PaymentContext(
+            payment_id=uuid.uuid4(),
+            amount=1000.0,
+            payment_method="card",
+            status="failed",
+        ),
     )
 
     results = hybrid.retrieve_relevant_cases(context, top_k=5)
@@ -189,7 +205,12 @@ def test_empty_deterministic_results():
     )
     context = CustomerRecoveryContext(
         customer=CustomerContext(customer_id=cid),
-        current_payment=PaymentContext(payment_id=uuid.uuid4(), amount=1000.0, payment_method="card", status="failed"),
+        current_payment=PaymentContext(
+            payment_id=uuid.uuid4(),
+            amount=1000.0,
+            payment_method="card",
+            status="failed",
+        ),
     )
 
     results = hybrid.retrieve_relevant_cases(context, top_k=5)
@@ -214,7 +235,12 @@ def test_empty_semantic_results():
     )
     context = CustomerRecoveryContext(
         customer=CustomerContext(customer_id=cid),
-        current_payment=PaymentContext(payment_id=uuid.uuid4(), amount=1000.0, payment_method="card", status="failed"),
+        current_payment=PaymentContext(
+            payment_id=uuid.uuid4(),
+            amount=1000.0,
+            payment_method="card",
+            status="failed",
+        ),
     )
 
     results = hybrid.retrieve_relevant_cases(context, top_k=5)
@@ -235,7 +261,12 @@ def test_both_retrievers_empty_returns_empty_list():
     )
     context = CustomerRecoveryContext(
         customer=CustomerContext(customer_id=uuid.uuid4()),
-        current_payment=PaymentContext(payment_id=uuid.uuid4(), amount=1000.0, payment_method="card", status="failed"),
+        current_payment=PaymentContext(
+            payment_id=uuid.uuid4(),
+            amount=1000.0,
+            payment_method="card",
+            status="failed",
+        ),
     )
 
     assert hybrid.retrieve_relevant_cases(context, top_k=5) == []
@@ -288,7 +319,12 @@ def test_deterministic_tie_breaking_policy():
     )
     context = CustomerRecoveryContext(
         customer=CustomerContext(customer_id=cid),
-        current_payment=PaymentContext(payment_id=uuid.uuid4(), amount=1000.0, payment_method="card", status="failed"),
+        current_payment=PaymentContext(
+            payment_id=uuid.uuid4(),
+            amount=1000.0,
+            payment_method="card",
+            status="failed",
+        ),
     )
 
     results = hybrid.retrieve_relevant_cases(context, top_k=2)
@@ -326,7 +362,12 @@ def test_top_k_limits_and_validation():
     )
     context = CustomerRecoveryContext(
         customer=CustomerContext(customer_id=cid),
-        current_payment=PaymentContext(payment_id=uuid.uuid4(), amount=1000.0, payment_method="card", status="failed"),
+        current_payment=PaymentContext(
+            payment_id=uuid.uuid4(),
+            amount=1000.0,
+            payment_method="card",
+            status="failed",
+        ),
     )
 
     results_3 = hybrid.retrieve_relevant_cases(context, top_k=3)
@@ -539,4 +580,3 @@ def test_hybrid_retriever_default_instantiation_without_arguments():
     assert hybrid.semantic_retriever is None
     assert hybrid.deterministic_retriever is not None
     assert hybrid.rrf_k == DEFAULT_RRF_K
-

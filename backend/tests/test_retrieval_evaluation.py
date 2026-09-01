@@ -5,11 +5,10 @@ Tests validation rules, bounds, duplicate detection, and immutability for
 EvaluationCase, GroundTruthJudgment, RetrievalEvalResult, and RetrieverBenchmarkReport.
 """
 
-from datetime import datetime, timezone
 import uuid
-import pytest
-from pydantic import ValidationError
+from datetime import datetime
 
+import pytest
 from app.context import (
     CustomerContext,
     CustomerRecoveryContext,
@@ -20,11 +19,13 @@ from app.evaluation.schemas import (
     GroundTruthJudgment,
     RetrievalEvalResult,
     RetrieverBenchmarkReport,
-    RELEVANCE_GRADE_DESCRIPTIONS,
 )
+from pydantic import ValidationError
 
 
-def _make_dummy_context(customer_id: uuid.UUID | None = None) -> CustomerRecoveryContext:
+def _make_dummy_context(
+    customer_id: uuid.UUID | None = None,
+) -> CustomerRecoveryContext:
     cid = customer_id or uuid.uuid4()
     return CustomerRecoveryContext(
         customer=CustomerContext(customer_id=cid),
@@ -101,7 +102,9 @@ def test_evaluation_case_valid_construction():
     pid2 = uuid.uuid4()
 
     gt = (
-        GroundTruthJudgment(payment_id=pid1, relevance_grade=3, rationale="Exact match"),
+        GroundTruthJudgment(
+            payment_id=pid1, relevance_grade=3, rationale="Exact match"
+        ),
         GroundTruthJudgment(payment_id=pid2, relevance_grade=1, rationale="Weak match"),
     )
 

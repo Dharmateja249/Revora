@@ -13,17 +13,15 @@ Verifies:
 9. Zero / edge monetary values
 """
 
-from datetime import datetime, timezone, timedelta
 import json
 import uuid
-import pytest
-from pydantic import ValidationError
+from datetime import datetime, timedelta, timezone
 
+import pytest
 from app.historical_retrieval import (
     HistoricalCase,
-    SUPPORTED_RECOVERY_STATUSES,
 )
-
+from pydantic import ValidationError
 
 # ============================================================================
 # 1. Valid Construction

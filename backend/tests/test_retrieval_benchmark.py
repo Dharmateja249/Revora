@@ -6,7 +6,6 @@ retrievers over the golden evaluation dataset.
 """
 
 import pytest
-
 from app.evaluation.benchmark import (
     compare_benchmarks,
     format_comparison_markdown,
@@ -14,6 +13,7 @@ from app.evaluation.benchmark import (
     run_benchmark,
 )
 from app.evaluation.schemas import RetrieverBenchmarkReport
+
 from tests.fixtures.retrieval_golden_dataset import get_golden_evaluation_cases
 
 
@@ -28,7 +28,9 @@ def test_populate_benchmark_vector_index():
 
 def test_run_benchmark_end_to_end():
     """Run benchmark over subset or full golden dataset and verify report structures."""
-    cases = get_golden_evaluation_cases()[:5]  # Test subset for quick execution in unit test
+    cases = get_golden_evaluation_cases()[
+        :5
+    ]  # Test subset for quick execution in unit test
     reports = run_benchmark(evaluation_cases=cases, k_values=(1, 3, 5))
 
     assert "DeterministicHistoricalRetriever" in reports
@@ -74,7 +76,11 @@ def test_full_50_case_golden_benchmark():
     reports = run_benchmark(evaluation_cases=cases, k_values=(1, 3, 5, 10))
 
     assert len(reports) == 3
-    for name in ("DeterministicHistoricalRetriever", "SemanticHistoricalRetriever", "HybridHistoricalRetriever"):
+    for name in (
+        "DeterministicHistoricalRetriever",
+        "SemanticHistoricalRetriever",
+        "HybridHistoricalRetriever",
+    ):
         assert name in reports
         rep = reports[name]
         assert rep.num_queries == 50
@@ -90,7 +96,9 @@ def test_full_50_case_golden_benchmark():
 
 
 def test_run_benchmark_requires_explicit_evaluation_cases():
-    with pytest.raises(ValueError, match="evaluation_cases must be explicitly provided"):
+    with pytest.raises(
+        ValueError, match="evaluation_cases must be explicitly provided"
+    ):
         run_benchmark(evaluation_cases=None)  # type: ignore
 
 
@@ -101,6 +109,7 @@ def test_cross_customer_negative_candidates_and_tenant_isolation():
     tenant isolation while an unsafe retriever leaks them and is penalized by metrics.
     """
     from uuid import UUID
+
     from app.embedding_service import get_embedding_service
     from app.evaluation.evaluator import RetrievalEvaluator
     from app.historical_retrieval import HistoricalCase
@@ -111,12 +120,17 @@ def test_cross_customer_negative_candidates_and_tenant_isolation():
     vector_index = populate_benchmark_vector_index(cases, svc)
 
     # 1. Verify foreign-customer candidates are present in the shared vector index with their real customer_id
-    foreign_cust_id = UUID("00000000-0000-0014-0000-000000000063")  # customer 99 in hex (0x63)
+    foreign_cust_id = UUID(
+        "00000000-0000-0014-0000-000000000063"
+    )  # customer 99 in hex (0x63)
     foreign_docs = [
-        doc for _, doc in vector_index._entries.values()
+        doc
+        for _, doc in vector_index._entries.values()
         if doc.metadata.get("customer_id") == str(foreign_cust_id)
     ]
-    assert len(foreign_docs) > 0, "Cross-customer negative cases must be materialized in the index."
+    assert len(foreign_docs) > 0, (
+        "Cross-customer negative cases must be materialized in the index."
+    )
 
     # 2. Test Scenario 1 (Customer 1):
     case1 = cases[0]
@@ -124,10 +138,14 @@ def test_cross_customer_negative_candidates_and_tenant_isolation():
     assert cust1_id != foreign_cust_id
 
     # 3. Production SemanticHistoricalRetriever strictly filters on Customer 1
-    prod_retriever = SemanticHistoricalRetriever(vector_index=vector_index, embedding_service=svc)
+    prod_retriever = SemanticHistoricalRetriever(
+        vector_index=vector_index, embedding_service=svc
+    )
     retrieved_prod = prod_retriever.retrieve(case1.context, top_k=10)
     for c in retrieved_prod:
-        assert c.customer_id == cust1_id, "Production retriever must NEVER leak foreign customer cases."
+        assert c.customer_id == cust1_id, (
+            "Production retriever must NEVER leak foreign customer cases."
+        )
 
     # 4. Intentionally UNSAFE retriever (bypasses tenant isolation filter)
     class UnsafeLeakyRetriever:
@@ -151,7 +169,10 @@ def test_cross_customer_negative_candidates_and_tenant_isolation():
                         amount=float(meta.get("amount", 0.0)),
                         currency=meta.get("currency", "INR"),
                         payment_method=meta.get("payment_method", "upi"),
-                        recovery_status=meta.get("recovery_status", "recovered" if meta.get("was_recovered") else "failed"),
+                        recovery_status=meta.get(
+                            "recovery_status",
+                            "recovered" if meta.get("was_recovered") else "failed",
+                        ),
                         status="succeeded" if meta.get("was_recovered") else "failed",
                         was_recovered=bool(meta.get("was_recovered", False)),
                     )
@@ -163,12 +184,25 @@ def test_cross_customer_negative_candidates_and_tenant_isolation():
 
     # Verify unsafe retriever leaks foreign customer case
     leaked_foreign = [c for c in retrieved_unsafe if c.customer_id == foreign_cust_id]
-    assert len(leaked_foreign) > 0, "Unsafe retriever should have matched the foreign customer candidate."
+    assert len(leaked_foreign) > 0, (
+        "Unsafe retriever should have matched the foreign customer candidate."
+    )
 
     # 5. Verify that the evaluation runner penalizes the leaky retriever on Scenario 1
-    safe_eval = RetrievalEvaluator(evaluation_cases=[case1]).evaluate(retriever=prod_retriever, retriever_name="ProdSemantic", k_values=(3,)).results[0]
-    unsafe_eval = RetrievalEvaluator(evaluation_cases=[case1]).evaluate(retriever=unsafe_retriever, retriever_name="UnsafeLeaky", k_values=(3,)).results[0]
+    safe_eval = (
+        RetrievalEvaluator(evaluation_cases=[case1])
+        .evaluate(
+            retriever=prod_retriever, retriever_name="ProdSemantic", k_values=(3,)
+        )
+        .results[0]
+    )
+    unsafe_eval = (
+        RetrievalEvaluator(evaluation_cases=[case1])
+        .evaluate(
+            retriever=unsafe_retriever, retriever_name="UnsafeLeaky", k_values=(3,)
+        )
+        .results[0]
+    )
 
     # The unsafe retriever should score lower or equal Precision/NDCG because foreign candidate has relevance Grade 0
     assert safe_eval.precision_at_k >= unsafe_eval.precision_at_k
-

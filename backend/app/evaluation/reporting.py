@@ -5,11 +5,11 @@ Generates production-grade machine-readable JSON reports, human-readable Markdow
 reports, executive summaries, regression diagnostic tables, and EvaluationReport artifacts.
 """
 
-from datetime import datetime, timezone
 import json
+from collections.abc import Mapping
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
-from uuid import uuid4
+from typing import Any
 
 from app.evaluation.regression import (
     RegressionAnalysis,
@@ -26,8 +26,8 @@ from app.evaluation.schemas import (
 
 def create_evaluation_report(
     reports: Mapping[str, RetrieverBenchmarkReport],
-    report_id: Optional[str] = None,
-    dataset_name: Optional[str] = None,
+    report_id: str | None = None,
+    dataset_name: str | None = None,
     dataset_version: str = "v1",
 ) -> EvaluationReport:
     """
@@ -44,7 +44,8 @@ def create_evaluation_report(
     """
     if not reports:
         return EvaluationReport(
-            report_id=report_id or f"eval_report_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}",
+            report_id=report_id
+            or f"eval_report_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}",
             dataset_name=dataset_name or "empty_dataset",
             dataset_version=dataset_version,
             query_count=0,
@@ -56,13 +57,16 @@ def create_evaluation_report(
     d_name = dataset_name or first_report.dataset_name
     q_count = first_report.num_queries
     k_vals = tuple(first_report.k_values)
-    r_id = report_id or f"eval_{d_name}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    r_id = (
+        report_id
+        or f"eval_{d_name}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    )
 
-    summaries: Dict[str, RetrieverEvaluationSummary] = {}
+    summaries: dict[str, RetrieverEvaluationSummary] = {}
     for name, rep in reports.items():
-        p_at_k: Dict[int, float] = {}
-        r_at_k: Dict[int, float] = {}
-        n_at_k: Dict[int, float] = {}
+        p_at_k: dict[int, float] = {}
+        r_at_k: dict[int, float] = {}
+        n_at_k: dict[int, float] = {}
 
         for k in rep.k_values:
             p_at_k[k] = rep.aggregate_metrics.get(f"mean_precision_at_{k}", 0.0)
@@ -91,8 +95,8 @@ def create_evaluation_report(
 
 
 def generate_json_report(
-    reports: Union[Mapping[str, RetrieverBenchmarkReport], EvaluationReport],
-    regressions: Optional[Union[Mapping[str, RegressionAnalysis], RegressionReport]] = None,
+    reports: Mapping[str, RetrieverBenchmarkReport] | EvaluationReport,
+    regressions: Mapping[str, RegressionAnalysis] | RegressionReport | None = None,
     indent: int = 2,
 ) -> str:
     """
@@ -132,7 +136,7 @@ def generate_json_report(
     num_queries = first_report.num_queries
     k_values = list(first_report.k_values)
 
-    retrievers_payload: Dict[str, Any] = {}
+    retrievers_payload: dict[str, Any] = {}
 
     for name in sorted(reports.keys()):
         rep = reports[name]
@@ -189,7 +193,7 @@ def generate_json_report(
                 ],
             }
 
-    root_payload: Dict[str, Any] = {
+    root_payload: dict[str, Any] = {
         "benchmark": {
             "dataset_name": dataset_name,
             "query_count": num_queries,
@@ -218,11 +222,11 @@ def generate_json_report(
 
 
 def generate_markdown_report(
-    reports: Union[Mapping[str, RetrieverBenchmarkReport], EvaluationReport],
-    regressions: Optional[Union[Mapping[str, RegressionAnalysis], RegressionReport]] = None,
-    dataset_name: Optional[str] = None,
-    query_count: Optional[int] = None,
-    total_judgments: Optional[int] = None,
+    reports: Mapping[str, RetrieverBenchmarkReport] | EvaluationReport,
+    regressions: Mapping[str, RegressionAnalysis] | RegressionReport | None = None,
+    dataset_name: str | None = None,
+    query_count: int | None = None,
+    total_judgments: int | None = None,
 ) -> str:
     """
     Generate a comprehensive human-readable Markdown evaluation report.
@@ -235,7 +239,11 @@ def generate_markdown_report(
         k_vals = list(reports.configured_k_values)
         d_name = dataset_name or reports.dataset_name
         n_queries = query_count if query_count is not None else reports.query_count
-        n_judgments = total_judgments if total_judgments is not None else reports.metadata.get("total_judgments")
+        n_judgments = (
+            total_judgments
+            if total_judgments is not None
+            else reports.metadata.get("total_judgments")
+        )
 
         # Helper extractors for EvaluationReport
         def get_mrr(name: str) -> float:
@@ -260,7 +268,11 @@ def generate_markdown_report(
         k_vals = list(first_report.k_values)
         d_name = dataset_name or first_report.dataset_name
         n_queries = query_count if query_count is not None else first_report.num_queries
-        n_judgments = total_judgments if total_judgments is not None else first_report.metadata.get("total_judgments")
+        n_judgments = (
+            total_judgments
+            if total_judgments is not None
+            else first_report.metadata.get("total_judgments")
+        )
 
         def get_mrr(name: str) -> float:
             return reports[name].aggregate_metrics.get("mrr", 0.0)
@@ -277,7 +289,7 @@ def generate_markdown_report(
         def get_n(name: str, k: int) -> float:
             return reports[name].aggregate_metrics.get(f"mean_ndcg_at_{k}", 0.0)
 
-    sections: List[str] = []
+    sections: list[str] = []
 
     # Title & Overview
     sections.append("# Revora Retrieval Evaluation Report\n")
@@ -290,10 +302,12 @@ def generate_markdown_report(
     ]
     if n_judgments is not None:
         overview_table.append(f"| **Ground-Truth Judgments** | `{n_judgments}` |")
-    overview_table.extend([
-        f"| **Evaluated Retrievers** | `{len(retriever_names)}` ({', '.join(retriever_names)}) |",
-        f"| **Benchmark Depths (K)** | `{', '.join(str(k) for k in k_vals)}` |",
-    ])
+    overview_table.extend(
+        [
+            f"| **Evaluated Retrievers** | `{len(retriever_names)}` ({', '.join(retriever_names)}) |",
+            f"| **Benchmark Depths (K)** | `{', '.join(str(k) for k in k_vals)}` |",
+        ]
+    )
     sections.append("\n".join(overview_table) + "\n")
 
     # Executive Summary
@@ -323,14 +337,22 @@ def generate_markdown_report(
     if regressions:
         sections.append("## 3. Regression Status\n")
         if isinstance(regressions, RegressionReport):
-            st_icon = "🟢 PASS" if regressions.overall_status == "PASS" else ("🟡 WARN" if regressions.overall_status == "WARN" else "🔴 FAIL")
+            st_icon = (
+                "🟢 PASS"
+                if regressions.overall_status == "PASS"
+                else ("🟡 WARN" if regressions.overall_status == "WARN" else "🔴 FAIL")
+            )
             reg_rows = [
                 f"**Overall Status**: **{st_icon}** (Baseline: `{regressions.baseline_report_id}` vs Candidate: `{regressions.candidate_report_id}`)\n",
                 "| Retriever | Metric | Baseline | Candidate | Delta | Status | Message |",
                 "| :--- | :--- | :---: | :---: | :---: | :---: | :--- |",
             ]
             for c in regressions.checks:
-                c_icon = "🟢 PASS" if c.status == "PASS" else ("🟡 WARN" if c.status == "WARN" else "🔴 FAIL")
+                c_icon = (
+                    "🟢 PASS"
+                    if c.status == "PASS"
+                    else ("🟡 WARN" if c.status == "WARN" else "🔴 FAIL")
+                )
                 reg_rows.append(
                     f"| **{c.retriever_name}** | `{c.metric_name}` | `{c.baseline_value:.4f}` | `{c.candidate_value:.4f}` | `{c.delta:+.4f}` | {c_icon} | {c.message} |"
                 )
@@ -343,9 +365,21 @@ def generate_markdown_report(
             for name in retriever_names:
                 if name in regressions:
                     reg = regressions[name]
-                    status_icon = "🟢 PASS" if reg.status == "PASS" else ("🟡 WARN" if reg.status == "WARN" else "🔴 FAIL")
-                    crit_count = sum(1 for f in reg.findings if f.severity == RegressionSeverity.CRITICAL)
-                    warn_count = sum(1 for f in reg.findings if f.severity == RegressionSeverity.WARNING)
+                    status_icon = (
+                        "🟢 PASS"
+                        if reg.status == "PASS"
+                        else ("🟡 WARN" if reg.status == "WARN" else "🔴 FAIL")
+                    )
+                    crit_count = sum(
+                        1
+                        for f in reg.findings
+                        if f.severity == RegressionSeverity.CRITICAL
+                    )
+                    warn_count = sum(
+                        1
+                        for f in reg.findings
+                        if f.severity == RegressionSeverity.WARNING
+                    )
                     reg_rows.append(
                         f"| **{name}** | **{status_icon}** | `{crit_count}` | `{warn_count}` | `{len(reg.findings)}` |"
                     )
@@ -354,22 +388,44 @@ def generate_markdown_report(
     # Comprehensive Table
     sections.append("## 4. Comprehensive Metrics Comparison\n")
     table_header = ["| Metric | " + " | ".join(retriever_names) + " |"]
-    table_header.append("| :--- | " + " | ".join([":---:" for _ in retriever_names]) + " |")
+    table_header.append(
+        "| :--- | " + " | ".join([":---:" for _ in retriever_names]) + " |"
+    )
 
-    table_rows: List[str] = list(table_header)
-    table_rows.append("| **MRR** | " + " | ".join([f"{get_mrr(n):.4f}" for n in retriever_names]) + " |")
-    table_rows.append("| **Latency (ms)** | " + " | ".join([f"{get_lat(n):.2f} ms" for n in retriever_names]) + " |")
+    table_rows: list[str] = list(table_header)
+    table_rows.append(
+        "| **MRR** | "
+        + " | ".join([f"{get_mrr(n):.4f}" for n in retriever_names])
+        + " |"
+    )
+    table_rows.append(
+        "| **Latency (ms)** | "
+        + " | ".join([f"{get_lat(n):.2f} ms" for n in retriever_names])
+        + " |"
+    )
 
     for k in k_vals:
-        table_rows.append(f"| **Precision@{k}** | " + " | ".join([f"{get_p(n, k):.4f}" for n in retriever_names]) + " |")
-        table_rows.append(f"| **Recall@{k}** | " + " | ".join([f"{get_r(n, k):.4f}" for n in retriever_names]) + " |")
-        table_rows.append(f"| **NDCG@{k}** | " + " | ".join([f"{get_n(n, k):.4f}" for n in retriever_names]) + " |")
+        table_rows.append(
+            f"| **Precision@{k}** | "
+            + " | ".join([f"{get_p(n, k):.4f}" for n in retriever_names])
+            + " |"
+        )
+        table_rows.append(
+            f"| **Recall@{k}** | "
+            + " | ".join([f"{get_r(n, k):.4f}" for n in retriever_names])
+            + " |"
+        )
+        table_rows.append(
+            f"| **NDCG@{k}** | "
+            + " | ".join([f"{get_n(n, k):.4f}" for n in retriever_names])
+            + " |"
+        )
 
     sections.append("\n".join(table_rows) + "\n")
 
     # Automated Findings
     sections.append("## 5. Automated Engineering Findings\n")
-    findings_list: List[str] = []
+    findings_list: list[str] = []
 
     if "DeterministicHistoricalRetriever" in retriever_names:
         det_mrr = get_mrr("DeterministicHistoricalRetriever")
@@ -397,7 +453,7 @@ def generate_markdown_report(
 
     # Diagnostics if present in dictionary regressions
     if regressions and isinstance(regressions, dict):
-        all_diagnostics: List[str] = []
+        all_diagnostics: list[str] = []
         for name, reg in regressions.items():
             if reg.query_diagnostics:
                 all_diagnostics.append(f"### Diagnostics for `{name}`\n")
@@ -419,11 +475,11 @@ def generate_markdown_report(
 
 
 def save_benchmark_artifacts(
-    reports: Union[Mapping[str, RetrieverBenchmarkReport], EvaluationReport],
-    output_dir: Union[Path, str],
-    regressions: Optional[Union[Mapping[str, RegressionAnalysis], RegressionReport]] = None,
-    total_judgments: Optional[int] = None,
-) -> Dict[str, Path]:
+    reports: Mapping[str, RetrieverBenchmarkReport] | EvaluationReport,
+    output_dir: Path | str,
+    regressions: Mapping[str, RegressionAnalysis] | RegressionReport | None = None,
+    total_judgments: int | None = None,
+) -> dict[str, Path]:
     """
     Persist benchmark JSON and Markdown artifacts to the specified directory.
     """

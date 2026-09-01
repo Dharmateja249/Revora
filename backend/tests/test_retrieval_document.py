@@ -16,19 +16,18 @@ Tests:
 12. Serialization round-tripping to/from dictionary and JSON
 """
 
-from datetime import datetime, timezone, timedelta
 import json
 import uuid
-import pytest
-from pydantic import ValidationError
+from datetime import datetime, timedelta, timezone
 
+import pytest
 from app.historical_retrieval import HistoricalCase
 from app.retrieval_document import (
     RetrievalDocument,
     construct_canonical_case_text,
     historical_case_to_document,
 )
-
+from pydantic import ValidationError
 
 # ============================================================================
 # 1. Valid Construction & Conversion

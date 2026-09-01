@@ -7,7 +7,8 @@ across the golden evaluation dataset, producing per-retriever benchmark reports
 and comparative performance summaries.
 """
 
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from collections.abc import Mapping, Sequence
+from typing import Any
 from uuid import UUID
 
 from app.embedding_service import EmbeddingService, get_embedding_service
@@ -23,7 +24,7 @@ from app.vector_index import VectorIndex
 
 def populate_benchmark_vector_index(
     evaluation_cases: Sequence[EvaluationCase],
-    embedding_service: Optional[EmbeddingService] = None,
+    embedding_service: EmbeddingService | None = None,
 ) -> VectorIndex:
     """
     Populate a VectorIndex with all historical payment documents from the evaluation cases,
@@ -33,7 +34,9 @@ def populate_benchmark_vector_index(
     represented across the benchmark, preserving true customer_id attributes for tenant isolation testing.
     """
     if evaluation_cases is None:
-        raise ValueError("evaluation_cases must be provided to populate benchmark vector index.")
+        raise ValueError(
+            "evaluation_cases must be provided to populate benchmark vector index."
+        )
 
     svc = embedding_service or get_embedding_service()
     vector_index = VectorIndex(dimension=svc.dimension)
@@ -95,8 +98,8 @@ def populate_benchmark_vector_index(
 def run_benchmark(
     evaluation_cases: Sequence[EvaluationCase],
     k_values: Sequence[int] = (1, 3, 5, 10),
-    embedding_service: Optional[EmbeddingService] = None,
-) -> Dict[str, RetrieverBenchmarkReport]:
+    embedding_service: EmbeddingService | None = None,
+) -> dict[str, RetrieverBenchmarkReport]:
     """
     Execute benchmark evaluation across all three Revora historical retrievers.
 
@@ -109,7 +112,9 @@ def run_benchmark(
         Dictionary mapping retriever name to its RetrieverBenchmarkReport.
     """
     if evaluation_cases is None:
-        raise ValueError("evaluation_cases must be explicitly provided to run_benchmark.")
+        raise ValueError(
+            "evaluation_cases must be explicitly provided to run_benchmark."
+        )
 
     cases = tuple(evaluation_cases)
     svc = embedding_service or get_embedding_service()
@@ -131,7 +136,7 @@ def run_benchmark(
     evaluator = RetrievalEvaluator(evaluation_cases=cases)
 
     # 3. Evaluate each retriever against identical queries and K values
-    reports: Dict[str, RetrieverBenchmarkReport] = {
+    reports: dict[str, RetrieverBenchmarkReport] = {
         "DeterministicHistoricalRetriever": evaluator.evaluate(
             retriever=deterministic_retriever,
             retriever_name="DeterministicHistoricalRetriever",
@@ -154,7 +159,7 @@ def run_benchmark(
 
 def compare_benchmarks(
     reports: Mapping[str, RetrieverBenchmarkReport],
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Generate a structured comparative analysis of retriever benchmark reports.
 
@@ -164,7 +169,7 @@ def compare_benchmarks(
     Returns:
         Structured dictionary comparing key metrics and latency across retrievers.
     """
-    summary: Dict[str, Any] = {
+    summary: dict[str, Any] = {
         "retrievers": list(reports.keys()),
         "metrics_comparison": {},
     }
@@ -179,16 +184,17 @@ def compare_benchmarks(
     # Metric keys to compare
     metric_keys = ["mrr", "mean_latency_ms"]
     for k in k_values:
-        metric_keys.extend([
-            f"mean_precision_at_{k}",
-            f"mean_recall_at_{k}",
-            f"mean_ndcg_at_{k}",
-        ])
+        metric_keys.extend(
+            [
+                f"mean_precision_at_{k}",
+                f"mean_recall_at_{k}",
+                f"mean_ndcg_at_{k}",
+            ]
+        )
 
     for m_key in metric_keys:
         summary["metrics_comparison"][m_key] = {
-            name: rep.aggregate_metrics.get(m_key, 0.0)
-            for name, rep in reports.items()
+            name: rep.aggregate_metrics.get(m_key, 0.0) for name, rep in reports.items()
         }
 
     return summary
@@ -207,7 +213,7 @@ def format_comparison_markdown(
     first_report = next(iter(reports.values()))
     k_values = first_report.k_values
 
-    lines: List[str] = [
+    lines: list[str] = [
         "| Metric | " + " | ".join(retriever_names) + " |",
         "| :--- | " + " | ".join([":---:" for _ in retriever_names]) + " |",
     ]
@@ -220,29 +226,56 @@ def format_comparison_markdown(
     # Core Summary Metrics
     lines.append(
         "| **MRR** | "
-        + " | ".join([_fmt(reports[n].aggregate_metrics.get("mrr", 0.0)) for n in retriever_names])
+        + " | ".join(
+            [
+                _fmt(reports[n].aggregate_metrics.get("mrr", 0.0))
+                for n in retriever_names
+            ]
+        )
         + " |"
     )
     lines.append(
         "| **Latency (ms)** | "
-        + " | ".join([f"{reports[n].aggregate_metrics.get('mean_latency_ms', 0.0):.2f} ms" for n in retriever_names])
+        + " | ".join(
+            [
+                f"{reports[n].aggregate_metrics.get('mean_latency_ms', 0.0):.2f} ms"
+                for n in retriever_names
+            ]
+        )
         + " |"
     )
 
     for k in k_values:
         lines.append(
             f"| **Precision@{k}** | "
-            + " | ".join([_fmt(reports[n].aggregate_metrics.get(f"mean_precision_at_{k}", 0.0)) for n in retriever_names])
+            + " | ".join(
+                [
+                    _fmt(
+                        reports[n].aggregate_metrics.get(f"mean_precision_at_{k}", 0.0)
+                    )
+                    for n in retriever_names
+                ]
+            )
             + " |"
         )
         lines.append(
             f"| **Recall@{k}** | "
-            + " | ".join([_fmt(reports[n].aggregate_metrics.get(f"mean_recall_at_{k}", 0.0)) for n in retriever_names])
+            + " | ".join(
+                [
+                    _fmt(reports[n].aggregate_metrics.get(f"mean_recall_at_{k}", 0.0))
+                    for n in retriever_names
+                ]
+            )
             + " |"
         )
         lines.append(
             f"| **NDCG@{k}** | "
-            + " | ".join([_fmt(reports[n].aggregate_metrics.get(f"mean_ndcg_at_{k}", 0.0)) for n in retriever_names])
+            + " | ".join(
+                [
+                    _fmt(reports[n].aggregate_metrics.get(f"mean_ndcg_at_{k}", 0.0))
+                    for n in retriever_names
+                ]
+            )
             + " |"
         )
 

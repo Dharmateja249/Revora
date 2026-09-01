@@ -16,16 +16,14 @@ Verifies:
 12. Customer PII exclusion
 """
 
-from datetime import datetime, timezone, timedelta
 import json
 import uuid
-import pytest
-from pydantic import ValidationError
+from datetime import datetime, timedelta, timezone
 
+import pytest
 from app.context import (
     CustomerContext,
     CustomerRecoveryContext,
-    CustomerRecoveryStatsContext,
     HistoricalPaymentContext,
     PaymentContext,
     RecoveryAttemptContext,
@@ -34,13 +32,11 @@ from app.context import (
 from app.historical_case import (
     HistoricalAttempt,
     HistoricalRecoveryCase,
-    SUPPORTED_ATTEMPT_STATUSES,
-    SUPPORTED_RECOVERY_STATUSES,
     map_context_to_historical_case,
     map_customer_recovery_context_to_cases,
     map_historical_payment_to_case,
 )
-
+from pydantic import ValidationError
 
 # ============================================================================
 # 1. Complete Historical Recovered Case
@@ -371,7 +367,9 @@ def test_external_mutation_of_attempts_list_does_not_affect_case():
     )
 
     # Mutate external list
-    att2 = HistoricalAttempt(action="retry_2", status="succeeded", amount_recovered=1000.0)
+    att2 = HistoricalAttempt(
+        action="retry_2", status="succeeded", amount_recovered=1000.0
+    )
     source_attempts.append(att2)
 
     assert len(case.attempts) == 1
@@ -762,4 +760,3 @@ def test_mapper_fallback_succeeded_payment():
     assert case.recovery_status == "recovered"
     assert case.amount_recovered == 1500.0
     assert case.attempts == ()
-

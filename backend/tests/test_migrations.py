@@ -1,20 +1,18 @@
-import pytest
 from pathlib import Path
-from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.exc import IntegrityError, OperationalError, DBAPIError
-from sqlalchemy.orm import sessionmaker
-from alembic.config import Config
-from alembic import command
 
-from app.database import Base
+import pytest
+from alembic import command
+from alembic.config import Config
+from app.historical_data import load_historical_data
 from app.models import (
     Customer,
     Payment,
-    RecoveryOpportunity,
     RecoveryAttempt,
-    AuditEvent,
+    RecoveryOpportunity,
 )
-from app.historical_data import load_historical_data
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
+from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture
@@ -173,21 +171,25 @@ def test_migration_0002_cleans_legacy_duplicates(alembic_config_factory):
     # 3. Verify exactly 1 attempt remains (earliest)
     with engine.connect() as conn:
         remaining = conn.execute(
-            text("SELECT id, action FROM recovery_attempts WHERE external_reference = 'rec_legacy_dup'")
+            text(
+                "SELECT id, action FROM recovery_attempts WHERE external_reference = 'rec_legacy_dup'"
+            )
         ).fetchall()
         assert len(remaining) == 1
-        assert remaining[0][0] in ("00000000-0000-0000-0000-000000000011", "00000000000000000000000000000011")
+        assert remaining[0][0] in (
+            "00000000-0000-0000-0000-000000000011",
+            "00000000000000000000000000000011",
+        )
         assert remaining[0][1] == "RETRY"
 
     # 4. Verify duplicate insert fails
-    with pytest.raises(IntegrityError):
-        with engine.begin() as conn:
-            conn.execute(
-                text(
-                    "INSERT INTO recovery_attempts (id, opportunity_id, action, status, amount_recovered, external_reference, created_at) "
-                    "VALUES ('00000000-0000-0000-0000-000000000099', '00000000-0000-0000-0000-000000000003', 'STOP', 'failed', 0.0, 'rec_legacy_dup', '2026-08-27 10:04:00')"
-                )
+    with pytest.raises(IntegrityError), engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO recovery_attempts (id, opportunity_id, action, status, amount_recovered, external_reference, created_at) "
+                "VALUES ('00000000-0000-0000-0000-000000000099', '00000000-0000-0000-0000-000000000003', 'STOP', 'failed', 0.0, 'rec_legacy_dup', '2026-08-27 10:04:00')"
             )
+        )
 
 
 def test_multiple_null_external_reference_allowed(alembic_config_factory):
@@ -241,7 +243,10 @@ def test_multiple_null_external_reference_allowed(alembic_config_factory):
 
     null_count = (
         session.query(RecoveryAttempt)
-        .filter(RecoveryAttempt.opportunity_id == opp.id, RecoveryAttempt.external_reference.is_(None))
+        .filter(
+            RecoveryAttempt.opportunity_id == opp.id,
+            RecoveryAttempt.external_reference.is_(None),
+        )
         .count()
     )
     assert null_count == 2
@@ -260,7 +265,11 @@ def test_migrated_database_historical_ingestion(alembic_config_factory):
     Session = sessionmaker(bind=engine)
     session = Session()
 
-    csv_path = Path(__file__).resolve().parent.parent.parent / "data" / "historical_recovery_data.csv"
+    csv_path = (
+        Path(__file__).resolve().parent.parent.parent
+        / "data"
+        / "historical_recovery_data.csv"
+    )
     if not csv_path.exists():
         pytest.skip("Historical dataset CSV not found.")
 

@@ -162,4 +162,3 @@ def test_total_amount_at_risk_no_double_counting():
     # pay_100 (10,000) + pay_200 (5,000) = 15,000 (NOT 35,000)
     assert stats["total_amount_at_risk"] == 15000.0
     assert stats["total_amount_recovered"] == 15000.0
-

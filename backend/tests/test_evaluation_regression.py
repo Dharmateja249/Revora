@@ -5,11 +5,9 @@ Validates regression detection, threshold enforcement, severity mapping, per-que
 diagnostics, and immutability.
 """
 
-from typing import Mapping
 from uuid import uuid4
-import pytest
-from pydantic import ValidationError
 
+import pytest
 from app.evaluation.regression import (
     EvaluationThresholds,
     QueryRegressionDiagnostic,
@@ -23,6 +21,7 @@ from app.evaluation.schemas import (
     RetrievalEvalResult,
     RetrieverBenchmarkReport,
 )
+from pydantic import ValidationError
 
 
 def _make_report_with_metrics(
@@ -100,7 +99,10 @@ def test_detect_mrr_quality_floor_regression_critical():
 
     assert analysis.status == "FAIL"
     assert analysis.has_critical_regression is True
-    assert any(f.metric == "mrr" and f.severity == RegressionSeverity.CRITICAL for f in analysis.findings)
+    assert any(
+        f.metric == "mrr" and f.severity == RegressionSeverity.CRITICAL
+        for f in analysis.findings
+    )
 
 
 def test_detect_relative_quality_drop_warning():
@@ -108,7 +110,11 @@ def test_detect_relative_quality_drop_warning():
     # 8% relative drop (0.95 -> 0.874): exceeds 5% max_relative_quality_drop, below 15% critical
     cand = _make_report_with_metrics(metrics={"mean_recall_at_3": 0.874})
 
-    thresholds = EvaluationThresholds(max_quality_drop=0.10, max_relative_quality_drop=0.05, critical_relative_quality_drop=0.15)
+    thresholds = EvaluationThresholds(
+        max_quality_drop=0.10,
+        max_relative_quality_drop=0.05,
+        critical_relative_quality_drop=0.15,
+    )
     analysis = detect_regressions(base, cand, thresholds=thresholds)
     assert analysis.status == "WARN"
     assert analysis.has_critical_regression is False
@@ -131,15 +137,27 @@ def test_detect_latency_regression_threshold():
 
 
 def test_compare_benchmark_runs_multi_retriever():
-    base_det = _make_report_with_metrics("DeterministicHistoricalRetriever", {"mrr": 0.98})
+    base_det = _make_report_with_metrics(
+        "DeterministicHistoricalRetriever", {"mrr": 0.98}
+    )
     base_sem = _make_report_with_metrics("SemanticHistoricalRetriever", {"mrr": 0.92})
 
-    cand_det = _make_report_with_metrics("DeterministicHistoricalRetriever", {"mrr": 0.98})
-    cand_sem = _make_report_with_metrics("SemanticHistoricalRetriever", {"mrr": 0.70})  # Significant drop
+    cand_det = _make_report_with_metrics(
+        "DeterministicHistoricalRetriever", {"mrr": 0.98}
+    )
+    cand_sem = _make_report_with_metrics(
+        "SemanticHistoricalRetriever", {"mrr": 0.70}
+    )  # Significant drop
 
     analyses = compare_benchmark_runs(
-        baseline_reports={"DeterministicHistoricalRetriever": base_det, "SemanticHistoricalRetriever": base_sem},
-        candidate_reports={"DeterministicHistoricalRetriever": cand_det, "SemanticHistoricalRetriever": cand_sem},
+        baseline_reports={
+            "DeterministicHistoricalRetriever": base_det,
+            "SemanticHistoricalRetriever": base_sem,
+        },
+        candidate_reports={
+            "DeterministicHistoricalRetriever": cand_det,
+            "SemanticHistoricalRetriever": cand_sem,
+        },
     )
 
     assert analyses["DeterministicHistoricalRetriever"].status == "PASS"

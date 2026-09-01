@@ -6,9 +6,8 @@ deterministic policy validation, and error fallback handling into an
 immutable AgentDecisionResult outcome.
 """
 
-from datetime import timezone
 import time
-from typing import Any, Dict, List, Optional, Sequence
+from collections.abc import Sequence
 
 from app.agent.context_builder import AgentContextBuilder
 from app.agent.prompts import build_agent_messages
@@ -49,8 +48,8 @@ class AgentOrchestrator:
     def __init__(
         self,
         provider: LLMProvider,
-        context_builder: Optional[AgentContextBuilder] = None,
-        policy_validator: Optional[PolicyValidator] = None,
+        context_builder: AgentContextBuilder | None = None,
+        policy_validator: PolicyValidator | None = None,
     ):
         """
         Initialize the AgentOrchestrator with required and optional components.
@@ -63,17 +62,25 @@ class AgentOrchestrator:
         Raises:
             TypeError: If any injected dependency violates expected types/contracts.
         """
-        if not isinstance(provider, LLMProvider) or not hasattr(provider, "generate") or not callable(getattr(provider, "generate")):
+        if (
+            not isinstance(provider, LLMProvider)
+            or not hasattr(provider, "generate")
+            or not callable(provider.generate)
+        ):
             raise TypeError(
                 f"Expected provider implementing LLMProvider protocol, got {type(provider).__name__}"
             )
 
-        if context_builder is not None and not isinstance(context_builder, AgentContextBuilder):
+        if context_builder is not None and not isinstance(
+            context_builder, AgentContextBuilder
+        ):
             raise TypeError(
                 f"Expected context_builder to be AgentContextBuilder, got {type(context_builder).__name__}"
             )
 
-        if policy_validator is not None and not isinstance(policy_validator, PolicyValidator):
+        if policy_validator is not None and not isinstance(
+            policy_validator, PolicyValidator
+        ):
             raise TypeError(
                 f"Expected policy_validator to be PolicyValidator, got {type(policy_validator).__name__}"
             )
@@ -101,7 +108,7 @@ class AgentOrchestrator:
         self,
         context: CustomerRecoveryContext,
         policy_context: RecoveryPolicyContext,
-        historical_cases: Optional[Sequence[HistoricalCase]] = None,
+        historical_cases: Sequence[HistoricalCase] | None = None,
     ) -> AgentDecisionResult:
         """
         Execute the adaptive recovery decision pipeline.
@@ -119,10 +126,12 @@ class AgentOrchestrator:
             ValueError: If policy_context is missing, or allowed_actions is empty (fails closed).
         """
         # 1. Build sanitized prompt context (fails closed on invalid policy or context)
-        prompt_context: AgentDecisionPromptContext = self._context_builder.build_prompt_context(
-            context=context,
-            historical_cases=historical_cases,
-            policy_context=policy_context,
+        prompt_context: AgentDecisionPromptContext = (
+            self._context_builder.build_prompt_context(
+                context=context,
+                historical_cases=historical_cases,
+                policy_context=policy_context,
+            )
         )
 
         # 2. Build deterministic chat messages
@@ -131,7 +140,9 @@ class AgentOrchestrator:
         # 3. Execute LLM Reasoning with monotonic high-resolution latency timer
         start_time = time.perf_counter()
         try:
-            raw_recommendation: LLMRecoveryRecommendation = await self._provider.generate(messages)
+            raw_recommendation: LLMRecoveryRecommendation = (
+                await self._provider.generate(messages)
+            )
             elapsed_ms = max(0.0, (time.perf_counter() - start_time) * 1000.0)
         except LLMProviderError as exc:
             elapsed_ms = max(0.0, (time.perf_counter() - start_time) * 1000.0)
@@ -142,9 +153,11 @@ class AgentOrchestrator:
             )
 
         # 4. Enforce deterministic policy validation on candidate action
-        validation_result: PolicyValidationResult = self._policy_validator.validate_decision(
-            candidate_action=raw_recommendation.recommended_action,
-            policy_context=policy_context,
+        validation_result: PolicyValidationResult = (
+            self._policy_validator.validate_decision(
+                candidate_action=raw_recommendation.recommended_action,
+                policy_context=policy_context,
+            )
         )
 
         provider_name = getattr(self._provider, "provider_name", None)
@@ -177,9 +190,8 @@ class AgentOrchestrator:
                 f"[Policy override: candidate '{raw_recommendation.recommended_action.value}' "
                 f"overridden to '{validation_result.effective_action.value}']"
             ),
-            key_factors=raw_recommendation.key_factors + (
-                f"policy_override:{validation_result.effective_action.value}",
-            ),
+            key_factors=raw_recommendation.key_factors
+            + (f"policy_override:{validation_result.effective_action.value}",),
             referenced_case_ids=raw_recommendation.referenced_case_ids,
         )
 
@@ -215,8 +227,10 @@ class AgentOrchestrator:
         """
         if (
             policy_context.mandatory_fallback_action is not None
-            and policy_context.mandatory_fallback_action in policy_context.allowed_actions
-            and policy_context.mandatory_fallback_action not in policy_context.prohibited_actions
+            and policy_context.mandatory_fallback_action
+            in policy_context.allowed_actions
+            and policy_context.mandatory_fallback_action
+            not in policy_context.prohibited_actions
         ):
             return policy_context.mandatory_fallback_action
 
@@ -270,7 +284,9 @@ class AgentOrchestrator:
             metadata={
                 "error_type": error_type_name,
                 "policy_overridden": False,
-                "applied_policy_ids": [r.policy_id for r in policy_context.applicable_rules],
+                "applied_policy_ids": [
+                    r.policy_id for r in policy_context.applicable_rules
+                ],
                 "violated_policy_ids": [],
             },
         )

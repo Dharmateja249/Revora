@@ -5,18 +5,15 @@ Validates integrity, uniqueness, determinism, grade distributions, temporal isol
 tenant isolation, and schema validity for the 50 golden evaluation cases.
 """
 
+import inspect
 from collections import Counter
 from datetime import timezone
-import inspect
-import sys
-from typing import Set
 from uuid import UUID
-import pytest
 
 from app.context import CustomerRecoveryContext
 from app.evaluation.schemas import EvaluationCase, GroundTruthJudgment
+
 from tests.fixtures.retrieval_golden_dataset import (
-    GOLDEN_EVALUATION_CASES,
     get_golden_evaluation_cases,
 )
 
@@ -44,7 +41,9 @@ def test_golden_dataset_ground_truth_payment_id_uniqueness_within_query():
     cases = get_golden_evaluation_cases()
     for case in cases:
         judgment_ids = [j.payment_id for j in case.ground_truth]
-        assert len(judgment_ids) == len(set(judgment_ids)), f"Duplicate judgment in query {case.query_id}"
+        assert len(judgment_ids) == len(set(judgment_ids)), (
+            f"Duplicate judgment in query {case.query_id}"
+        )
 
 
 def test_golden_dataset_relevance_grade_bounds_and_distribution():
@@ -53,7 +52,9 @@ def test_golden_dataset_relevance_grade_bounds_and_distribution():
     grade_counts = Counter()
 
     for case in cases:
-        assert len(case.ground_truth) > 0, f"Query {case.query_id} has empty ground truth"
+        assert len(case.ground_truth) > 0, (
+            f"Query {case.query_id} has empty ground truth"
+        )
         for judgment in case.ground_truth:
             assert isinstance(judgment, GroundTruthJudgment)
             assert judgment.relevance_grade in (0, 1, 2, 3)
@@ -101,7 +102,10 @@ def test_golden_dataset_determinism():
     for c1, c2 in zip(cases_1, cases_2):
         assert c1.query_id == c2.query_id
         assert c1.context.customer.customer_id == c2.context.customer.customer_id
-        assert c1.context.current_payment.payment_id == c2.context.current_payment.payment_id
+        assert (
+            c1.context.current_payment.payment_id
+            == c2.context.current_payment.payment_id
+        )
         assert len(c1.ground_truth) == len(c2.ground_truth)
         for j1, j2 in zip(c1.ground_truth, c2.ground_truth):
             assert j1.payment_id == j2.payment_id
@@ -155,12 +159,14 @@ def test_golden_dataset_customer_isolation():
     """Verify cross-customer candidates are strictly marked as Grade 0."""
     cases = get_golden_evaluation_cases()
     for case in cases:
-        cust_id = case.context.customer.customer_id
         hist_ids = {hp.payment_id for hp in case.context.historical_payments}
 
         for judgment in case.ground_truth:
             # If payment is not in the customer's historical payments and not the current payment, it is cross-customer
-            if judgment.payment_id not in hist_ids and judgment.payment_id != case.context.current_payment.payment_id:
+            if (
+                judgment.payment_id not in hist_ids
+                and judgment.payment_id != case.context.current_payment.payment_id
+            ):
                 assert judgment.relevance_grade == 0, (
                     f"Cross-customer payment {judgment.payment_id} must have relevance_grade 0 in query {case.query_id}"
                 )

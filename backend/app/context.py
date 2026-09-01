@@ -7,7 +7,6 @@ retrieval exceptions.
 """
 
 from datetime import datetime, timezone
-from typing import List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -25,8 +24,6 @@ def utc_now() -> datetime:
 
 class ContextRetrievalError(Exception):
     """Base exception for all context retrieval errors."""
-
-    pass
 
 
 class CustomerNotFoundError(ContextRetrievalError):
@@ -48,7 +45,12 @@ class PaymentNotFoundError(ContextRetrievalError):
 class PaymentCustomerMismatchError(ContextRetrievalError):
     """Raised when a payment exists but does not belong to the specified customer."""
 
-    def __init__(self, payment_id: str | UUID, customer_id: str | UUID, actual_customer_id: str | UUID):
+    def __init__(
+        self,
+        payment_id: str | UUID,
+        customer_id: str | UUID,
+        actual_customer_id: str | UUID,
+    ):
         self.payment_id = str(payment_id)
         self.customer_id = str(customer_id)
         self.actual_customer_id = str(actual_customer_id)
@@ -81,14 +83,14 @@ class CustomerContext(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     customer_id: UUID
-    external_customer_id: Optional[str] = None
-    name: Optional[str] = None
-    email: Optional[str] = None
+    external_customer_id: str | None = None
+    name: str | None = None
+    email: str | None = None
     total_payments: int = Field(default=0, ge=0)
     successful_payments: int = Field(default=0, ge=0)
     failed_payments: int = Field(default=0, ge=0)
     historical_success_rate: float = Field(default=0.0, ge=0.0, le=1.0)
-    created_at: Optional[datetime] = None
+    created_at: datetime | None = None
 
 
 class PaymentContext(BaseModel):
@@ -99,13 +101,13 @@ class PaymentContext(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     payment_id: UUID
-    external_payment_id: Optional[str] = None
+    external_payment_id: str | None = None
     amount: float = Field(ge=0.0)
     currency: str = Field(default="INR")
     payment_method: str
     status: str
-    failure_reason: Optional[str] = None
-    created_at: Optional[datetime] = None
+    failure_reason: str | None = None
+    created_at: datetime | None = None
 
 
 class RecoveryOpportunityContext(BaseModel):
@@ -119,9 +121,9 @@ class RecoveryOpportunityContext(BaseModel):
     status: str
     revenue_at_risk: float = Field(ge=0.0)
     expected_recovery: float = Field(default=0.0, ge=0.0)
-    recommended_action: Optional[str] = None
-    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    created_at: Optional[datetime] = None
+    recommended_action: str | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    created_at: datetime | None = None
 
 
 class RecoveryAttemptContext(BaseModel):
@@ -131,14 +133,14 @@ class RecoveryAttemptContext(BaseModel):
 
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
-    attempt_id: Optional[UUID] = None
+    attempt_id: UUID | None = None
     action: str
     status: str
     amount_recovered: float = Field(default=0.0, ge=0.0)
-    error_code: Optional[str] = None
-    external_reference: Optional[str] = None
-    created_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    error_code: str | None = None
+    external_reference: str | None = None
+    created_at: datetime | None = None
+    completed_at: datetime | None = None
 
 
 class HistoricalPaymentContext(BaseModel):
@@ -149,15 +151,15 @@ class HistoricalPaymentContext(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     payment_id: UUID
-    external_payment_id: Optional[str] = None
+    external_payment_id: str | None = None
     amount: float = Field(ge=0.0)
     currency: str = Field(default="INR")
     payment_method: str
     status: str
-    failure_reason: Optional[str] = None
-    created_at: Optional[datetime] = None
+    failure_reason: str | None = None
+    created_at: datetime | None = None
     was_recovered: bool = False
-    recovery_action: Optional[str] = None
+    recovery_action: str | None = None
     recovery_attempts_count: int = Field(default=0, ge=0)
 
 
@@ -172,8 +174,8 @@ class CustomerRecoveryStatsContext(BaseModel):
     recovered_opportunities: int = Field(default=0, ge=0)
     failed_opportunities: int = Field(default=0, ge=0)
     recovery_rate: float = Field(default=0.0, ge=0.0, le=1.0)
-    previously_successful_actions: List[str] = Field(default_factory=list)
-    previously_failed_actions: List[str] = Field(default_factory=list)
+    previously_successful_actions: list[str] = Field(default_factory=list)
+    previously_failed_actions: list[str] = Field(default_factory=list)
     total_amount_recovered: float = Field(default=0.0, ge=0.0)
 
 
@@ -186,10 +188,10 @@ class CustomerRecoveryContext(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     customer: CustomerContext
-    current_payment: Optional[PaymentContext] = None
-    current_opportunity: Optional[RecoveryOpportunityContext] = None
-    current_payment_attempts: List[RecoveryAttemptContext] = Field(default_factory=list)
-    historical_payments: List[HistoricalPaymentContext] = Field(default_factory=list)
+    current_payment: PaymentContext | None = None
+    current_opportunity: RecoveryOpportunityContext | None = None
+    current_payment_attempts: list[RecoveryAttemptContext] = Field(default_factory=list)
+    historical_payments: list[HistoricalPaymentContext] = Field(default_factory=list)
     recovery_statistics: CustomerRecoveryStatsContext = Field(
         default_factory=CustomerRecoveryStatsContext
     )

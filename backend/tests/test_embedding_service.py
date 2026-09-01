@@ -21,8 +21,8 @@ Tests:
 
 import math
 import uuid
-import pytest
 
+import pytest
 from app.embedding_service import (
     DeterministicLocalEmbeddingProvider,
     EmbeddingProvider,
@@ -34,7 +34,6 @@ from app.retrieval_document import (
     RetrievalDocument,
     historical_case_to_document,
 )
-
 
 # ============================================================================
 # 1. Single Text Embedding & Vector Properties

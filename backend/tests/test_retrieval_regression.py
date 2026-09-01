@@ -6,24 +6,23 @@ dataset compatibility checks, and CI assertions.
 """
 
 from uuid import uuid4
-import pytest
-from pydantic import ValidationError
 
+import pytest
 from app.evaluation.regression import (
-    RegressionSeverity,
     RegressionThresholds,
     assert_no_regressions,
     compare_reports,
     find_worst_query_regressions,
 )
 from app.evaluation.schemas import (
-    EvaluationReport,
     EvaluationRegressionError,
+    EvaluationReport,
     RegressionCheck,
     RegressionReport,
     RetrievalEvalResult,
     RetrieverEvaluationSummary,
 )
+from pydantic import ValidationError
 
 
 def _make_report(
@@ -81,7 +80,9 @@ def test_compare_reports_quality_regression_failure():
     failed_checks = [c for c in reg_report.checks if c.status == "FAIL"]
     assert len(failed_checks) > 0
 
-    with pytest.raises(EvaluationRegressionError, match="Evaluation Regression Detected"):
+    with pytest.raises(
+        EvaluationRegressionError, match="Evaluation Regression Detected"
+    ):
         assert_no_regressions(reg_report)
 
 
@@ -109,17 +110,21 @@ def test_compare_reports_dataset_incompatibility():
     with pytest.raises(ValueError, match="Dataset version mismatch"):
         compare_reports(base_v1, cand_v2)
 
-    cand_q40 = _make_report("cand_03", dataset_name="golden_v1", dataset_version="v1", query_count=40)
+    cand_q40 = _make_report(
+        "cand_03", dataset_name="golden_v1", dataset_version="v1", query_count=40
+    )
     with pytest.raises(ValueError, match="Query count mismatch"):
         compare_reports(base_v1, cand_q40)
 
-    cand_k = _make_report("cand_04", dataset_name="golden_v1", dataset_version="v1", k_vals=(1, 5))
+    cand_k = _make_report(
+        "cand_04", dataset_name="golden_v1", dataset_version="v1", k_vals=(1, 5)
+    )
     with pytest.raises(ValueError, match="K values mismatch"):
         compare_reports(base_v1, cand_k)
 
 
 def test_find_worst_query_regressions():
-    qid1, qid2, qid3 = uuid4(), uuid4(), uuid4()
+    qid1, qid2, _qid3 = uuid4(), uuid4(), uuid4()
 
     base_results = [
         RetrievalEvalResult(
@@ -167,7 +172,9 @@ def test_find_worst_query_regressions():
         ),
     ]
 
-    worst = find_worst_query_regressions(base_results, cand_results, metric="ndcg_at_3", limit=5)
+    worst = find_worst_query_regressions(
+        base_results, cand_results, metric="ndcg_at_3", limit=5
+    )
     assert len(worst) == 2
     # Worst regression (delta = -0.6) should be first
     assert worst[0].query_id == qid1
@@ -208,8 +215,12 @@ def test_find_worst_query_regressions_mrr_no_duplicates():
         for k in (1, 3, 5)
     ]
 
-    worst_mrr = find_worst_query_regressions(base_results, cand_results, metric="mrr", limit=10)
-    assert len(worst_mrr) == 1, f"Expected exactly 1 diagnostic for query MRR regression, got {len(worst_mrr)}"
+    worst_mrr = find_worst_query_regressions(
+        base_results, cand_results, metric="mrr", limit=10
+    )
+    assert len(worst_mrr) == 1, (
+        f"Expected exactly 1 diagnostic for query MRR regression, got {len(worst_mrr)}"
+    )
     assert worst_mrr[0].query_id == qid
     assert worst_mrr[0].metric_name == "mrr"
     assert worst_mrr[0].delta == pytest.approx(-0.67, rel=1e-2)

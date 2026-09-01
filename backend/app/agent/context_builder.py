@@ -6,7 +6,8 @@ into sanitized, bounded, immutable AgentDecisionPromptContext instances with str
 and deterministic ordering.
 """
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from collections.abc import Sequence
+from typing import Any
 
 from app.agent.schemas import AgentDecisionPromptContext
 from app.context import (
@@ -28,17 +29,23 @@ class AgentContextBuilder:
     """
 
     def __init__(self, max_historical_cases: int = 5):
-        if not isinstance(max_historical_cases, int) or isinstance(max_historical_cases, bool):
-            raise TypeError(f"max_historical_cases must be an integer, got {type(max_historical_cases).__name__}")
+        if not isinstance(max_historical_cases, int) or isinstance(
+            max_historical_cases, bool
+        ):
+            raise TypeError(
+                f"max_historical_cases must be an integer, got {type(max_historical_cases).__name__}"
+            )
         if max_historical_cases <= 0:
-            raise ValueError(f"max_historical_cases must be a positive integer, got {max_historical_cases}")
+            raise ValueError(
+                f"max_historical_cases must be a positive integer, got {max_historical_cases}"
+            )
         self.max_historical_cases = max_historical_cases
 
     def build_prompt_context(
         self,
         context: CustomerRecoveryContext,
-        historical_cases: Optional[Sequence[HistoricalCase]] = None,
-        policy_context: Optional[RecoveryPolicyContext] = None,
+        historical_cases: Sequence[HistoricalCase] | None = None,
+        policy_context: RecoveryPolicyContext | None = None,
     ) -> AgentDecisionPromptContext:
         """
         Build an immutable, sanitized AgentDecisionPromptContext from domain models.
@@ -52,20 +59,26 @@ class AgentContextBuilder:
             Immutable AgentDecisionPromptContext safe for LLM prompt generation.
         """
         if not isinstance(context, CustomerRecoveryContext):
-            raise TypeError(f"Expected CustomerRecoveryContext, got {type(context).__name__}")
+            raise TypeError(
+                f"Expected CustomerRecoveryContext, got {type(context).__name__}"
+            )
 
         if policy_context is None:
             raise ValueError("policy_context is required for agent prompt generation")
 
         if not isinstance(policy_context, RecoveryPolicyContext):
-            raise TypeError(f"Expected RecoveryPolicyContext, got {type(policy_context).__name__}")
+            raise TypeError(
+                f"Expected RecoveryPolicyContext, got {type(policy_context).__name__}"
+            )
 
         current_payment_payload = self._build_payment_context(context.current_payment)
         customer_profile_payload = self._build_customer_profile(
             context.customer,
             context.recovery_statistics,
         )
-        attempt_history_payload = self._build_attempt_history(context.current_payment_attempts)
+        attempt_history_payload = self._build_attempt_history(
+            context.current_payment_attempts
+        )
         historical_cases_payload = self._build_historical_cases(historical_cases)
         allowed_actions, prohibited_actions, mandatory_fallback, policy_constraints = (
             self._build_policy_boundary(policy_context)
@@ -84,8 +97,8 @@ class AgentContextBuilder:
 
     def _build_payment_context(
         self,
-        payment: Optional[PaymentContext],
-    ) -> Dict[str, Any]:
+        payment: PaymentContext | None,
+    ) -> dict[str, Any]:
         """
         Extract only approved payment fields using an explicit allowlist.
         Excludes payment_id, external_payment_id, and internal database attributes.
@@ -102,14 +115,16 @@ class AgentContextBuilder:
             "amount": float(payment.amount),
             "currency": str(payment.currency),
             "payment_method": str(payment.payment_method),
-            "failure_reason": str(payment.failure_reason) if payment.failure_reason else "unspecified",
+            "failure_reason": str(payment.failure_reason)
+            if payment.failure_reason
+            else "unspecified",
         }
 
     def _build_customer_profile(
         self,
-        customer: Optional[CustomerContext],
-        stats: Optional[CustomerRecoveryStatsContext],
-    ) -> Dict[str, Any]:
+        customer: CustomerContext | None,
+        stats: CustomerRecoveryStatsContext | None,
+    ) -> dict[str, Any]:
         """
         Extract anonymized customer aggregates and recovery statistics.
         Strictly excludes customer_id, external_customer_id, name, and email.
@@ -117,9 +132,13 @@ class AgentContextBuilder:
         total_payments = int(customer.total_payments) if customer else 0
         successful_payments = int(customer.successful_payments) if customer else 0
         failed_payments = int(customer.failed_payments) if customer else 0
-        historical_success_rate = float(customer.historical_success_rate) if customer else 0.0
+        historical_success_rate = (
+            float(customer.historical_success_rate) if customer else 0.0
+        )
 
-        total_recovery_opportunities = int(stats.total_recovery_opportunities) if stats else 0
+        total_recovery_opportunities = (
+            int(stats.total_recovery_opportunities) if stats else 0
+        )
         recovered_opportunities = int(stats.recovered_opportunities) if stats else 0
         failed_opportunities = int(stats.failed_opportunities) if stats else 0
         recovery_rate = float(stats.recovery_rate) if stats else 0.0
@@ -129,7 +148,9 @@ class AgentContextBuilder:
         previously_failed_actions = (
             [str(a) for a in stats.previously_failed_actions] if stats else []
         )
-        lifetime_amount_recovered = float(stats.total_amount_recovered) if stats else 0.0
+        lifetime_amount_recovered = (
+            float(stats.total_amount_recovered) if stats else 0.0
+        )
 
         return {
             "total_payments": total_payments,
@@ -147,8 +168,8 @@ class AgentContextBuilder:
 
     def _build_attempt_history(
         self,
-        attempts: Optional[Sequence[RecoveryAttemptContext]],
-    ) -> List[Dict[str, Any]]:
+        attempts: Sequence[RecoveryAttemptContext] | None,
+    ) -> list[dict[str, Any]]:
         """
         Extract chronological attempt sequence with sanitized fields.
         Excludes attempt_id, external_reference, and raw timestamps.
@@ -163,15 +184,17 @@ class AgentContextBuilder:
                     "attempt_number": idx + 1,
                     "action": str(attempt.action),
                     "status": str(attempt.status),
-                    "error_code": str(attempt.error_code) if attempt.error_code else "none",
+                    "error_code": str(attempt.error_code)
+                    if attempt.error_code
+                    else "none",
                 }
             )
         return payload
 
     def _build_historical_cases(
         self,
-        cases: Optional[Sequence[HistoricalCase]],
-    ) -> List[Dict[str, Any]]:
+        cases: Sequence[HistoricalCase] | None,
+    ) -> list[dict[str, Any]]:
         """
         Sort, cap, and format historical RAG evidence.
         Applies relevance score DESC with payment_id ASC as internal tie-breaker.
@@ -199,12 +222,18 @@ class AgentContextBuilder:
                     "amount": float(case.amount),
                     "currency": str(case.currency),
                     "payment_method": str(case.payment_method),
-                    "failure_reason": str(case.failure_reason) if case.failure_reason else "unspecified",
-                    "recovery_action": str(case.recovery_action) if case.recovery_action else "none",
+                    "failure_reason": str(case.failure_reason)
+                    if case.failure_reason
+                    else "unspecified",
+                    "recovery_action": str(case.recovery_action)
+                    if case.recovery_action
+                    else "none",
                     "recovery_status": str(case.recovery_status),
                     "amount_recovered": float(case.amount_recovered),
                     "was_recovered": bool(case.was_recovered),
-                    "relevance_score": float(case.relevance_score) if case.relevance_score is not None else 0.0,
+                    "relevance_score": float(case.relevance_score)
+                    if case.relevance_score is not None
+                    else 0.0,
                 }
             )
         return payload
@@ -212,19 +241,25 @@ class AgentContextBuilder:
     def _build_policy_boundary(
         self,
         policy_context: RecoveryPolicyContext,
-    ) -> Tuple[List[str], List[str], Optional[str], List[str]]:
+    ) -> tuple[list[str], list[str], str | None, list[str]]:
         """
         Transform active policy envelope into sanitized string collections.
         Extracts allowed actions, prohibited actions, mandatory fallback, and rule descriptions.
         """
         allowed = sorted(
-            [a.value if isinstance(a, RecoveryAction) else str(a) for a in policy_context.allowed_actions]
+            [
+                a.value if isinstance(a, RecoveryAction) else str(a)
+                for a in policy_context.allowed_actions
+            ]
         )
         if not allowed:
             raise ValueError("policy_context must contain at least one allowed action")
 
         prohibited = sorted(
-            [a.value if isinstance(a, RecoveryAction) else str(a) for a in policy_context.prohibited_actions]
+            [
+                a.value if isinstance(a, RecoveryAction) else str(a)
+                for a in policy_context.prohibited_actions
+            ]
         )
 
         fallback = None
@@ -235,6 +270,10 @@ class AgentContextBuilder:
                 else str(policy_context.mandatory_fallback_action)
             )
 
-        constraints = [str(rule.description) for rule in policy_context.applicable_rules if rule.description]
+        constraints = [
+            str(rule.description)
+            for rule in policy_context.applicable_rules
+            if rule.description
+        ]
 
         return allowed, prohibited, fallback, constraints

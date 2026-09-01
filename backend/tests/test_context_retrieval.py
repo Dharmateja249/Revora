@@ -16,27 +16,26 @@ Tests:
 12. Deterministic ordering of historical records
 """
 
-from datetime import datetime, timezone, timedelta
 import uuid
-import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from datetime import datetime, timedelta, timezone
 
+import pytest
+from app.context import (
+    CustomerNotFoundError,
+    PaymentCustomerMismatchError,
+    PaymentNotFoundError,
+    RecoveryOpportunityNotFoundError,
+)
+from app.context_retrieval import get_customer_context
 from app.database import Base
 from app.models import (
     Customer,
     Payment,
-    RecoveryOpportunity,
     RecoveryAttempt,
-    AuditEvent,
+    RecoveryOpportunity,
 )
-from app.context import (
-    CustomerNotFoundError,
-    PaymentNotFoundError,
-    PaymentCustomerMismatchError,
-    RecoveryOpportunityNotFoundError,
-)
-from app.context_retrieval import get_customer_context
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture
@@ -545,7 +544,10 @@ def test_strict_customer_data_isolation(db_session):
     # Ensure other customer's action and data are NOT in target's context
     assert ctx.historical_payments == []
     assert ctx.recovery_statistics.previously_successful_actions == []
-    assert "exclusive_vip_action" not in ctx.recovery_statistics.previously_successful_actions
+    assert (
+        "exclusive_vip_action"
+        not in ctx.recovery_statistics.previously_successful_actions
+    )
     assert ctx.recovery_statistics.total_amount_recovered == 0.0
 
 
@@ -592,34 +594,93 @@ def test_history_limit_parameter(db_session):
 def test_retrieval_with_ingested_csv_data(db_session, tmp_path):
     """Verify context retrieval on data ingested via the historical ingestion pipeline."""
     import csv
+
     from app.historical_data import load_historical_data
 
     csv_file = tmp_path / "test_ingestion.csv"
     headers = [
-        "record_id", "customer_id", "payment_id", "customer_payment_count",
-        "customer_success_rate", "customer_previous_failures", "payment_amount",
-        "currency", "payment_method", "failure_reason", "attempt_number",
-        "hours_since_failure", "action_taken", "previous_action",
-        "previous_attempt_count", "recovered", "amount_recovered", "recovery_time_hours"
+        "record_id",
+        "customer_id",
+        "payment_id",
+        "customer_payment_count",
+        "customer_success_rate",
+        "customer_previous_failures",
+        "payment_amount",
+        "currency",
+        "payment_method",
+        "failure_reason",
+        "attempt_number",
+        "hours_since_failure",
+        "action_taken",
+        "previous_action",
+        "previous_attempt_count",
+        "recovered",
+        "amount_recovered",
+        "recovery_time_hours",
     ]
     rows = [
         # Payment 1 (past attempt 1 - failed)
         [
-            "rec_001", "cust_ingest_1", "pay_ingest_1", "5", "0.8", "1", "1200.0",
-            "INR", "card", "insufficient_funds", "1", "1.0", "smart_retry", "none", "0",
-            "false", "0.0", "0.0"
+            "rec_001",
+            "cust_ingest_1",
+            "pay_ingest_1",
+            "5",
+            "0.8",
+            "1",
+            "1200.0",
+            "INR",
+            "card",
+            "insufficient_funds",
+            "1",
+            "1.0",
+            "smart_retry",
+            "none",
+            "0",
+            "false",
+            "0.0",
+            "0.0",
         ],
         # Payment 1 (past attempt 2 - succeeded)
         [
-            "rec_002", "cust_ingest_1", "pay_ingest_1", "5", "0.8", "1", "1200.0",
-            "INR", "card", "insufficient_funds", "2", "24.0", "customer_prompt", "smart_retry", "1",
-            "true", "1200.0", "24.0"
+            "rec_002",
+            "cust_ingest_1",
+            "pay_ingest_1",
+            "5",
+            "0.8",
+            "1",
+            "1200.0",
+            "INR",
+            "card",
+            "insufficient_funds",
+            "2",
+            "24.0",
+            "customer_prompt",
+            "smart_retry",
+            "1",
+            "true",
+            "1200.0",
+            "24.0",
         ],
         # Payment 2 (current failed payment)
         [
-            "rec_003", "cust_ingest_1", "pay_ingest_2", "5", "0.8", "1", "2500.0",
-            "INR", "upi", "bank_timeout", "1", "0.5", "smart_retry", "none", "0",
-            "false", "0.0", "0.0"
+            "rec_003",
+            "cust_ingest_1",
+            "pay_ingest_2",
+            "5",
+            "0.8",
+            "1",
+            "2500.0",
+            "INR",
+            "upi",
+            "bank_timeout",
+            "1",
+            "0.5",
+            "smart_retry",
+            "none",
+            "0",
+            "false",
+            "0.0",
+            "0.0",
         ],
     ]
     with open(csv_file, "w", newline="", encoding="utf-8") as f:
@@ -650,4 +711,3 @@ def test_retrieval_with_ingested_csv_data(db_session, tmp_path):
     assert ctx.recovery_statistics.recovery_rate == 1.0
     assert ctx.recovery_statistics.total_amount_recovered == 1200.0
     assert "customer_prompt" in ctx.recovery_statistics.previously_successful_actions
-

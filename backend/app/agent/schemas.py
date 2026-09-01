@@ -5,10 +5,10 @@ Defines immutable Pydantic v2 data contracts for LLM prompt context construction
 structured LLM decision generation, and agent execution results.
 """
 
-from datetime import datetime, timezone
 import types
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
-from uuid import UUID
+from collections.abc import Mapping
+from datetime import datetime, timezone
+from typing import Any
 
 from pydantic import (
     BaseModel,
@@ -71,11 +71,11 @@ class LLMRecoveryRecommendation(BaseModel):
         ...,
         description="Structured explanation articulating why the recovery action was chosen.",
     )
-    key_factors: Tuple[str, ...] = Field(
+    key_factors: tuple[str, ...] = Field(
         default_factory=tuple,
         description="Key supporting factors or evidence signals contributing to the decision.",
     )
-    referenced_case_ids: Tuple[str, ...] = Field(
+    referenced_case_ids: tuple[str, ...] = Field(
         default_factory=tuple,
         description="Historical case or payment IDs referenced by the LLM as supporting evidence.",
     )
@@ -89,7 +89,7 @@ class LLMRecoveryRecommendation(BaseModel):
 
     @field_validator("key_factors", "referenced_case_ids", mode="before")
     @classmethod
-    def _normalize_string_tuples(cls, v: Any) -> Tuple[str, ...]:
+    def _normalize_string_tuples(cls, v: Any) -> tuple[str, ...]:
         if v is None:
             return ()
         if isinstance(v, str):
@@ -106,7 +106,7 @@ class LLMRecoveryRecommendation(BaseModel):
         return tuple(normalized)
 
     @field_serializer("key_factors", "referenced_case_ids")
-    def _serialize_tuples(self, v: Tuple[str, ...], _info: Any) -> List[str]:
+    def _serialize_tuples(self, v: tuple[str, ...], _info: Any) -> list[str]:
         return list(v)
 
 
@@ -131,27 +131,27 @@ class AgentDecisionPromptContext(BaseModel):
         ...,
         description="Anonymized customer recovery metrics and success statistics.",
     )
-    recovery_attempt_history: Tuple[Mapping[str, Any], ...] = Field(
+    recovery_attempt_history: tuple[Mapping[str, Any], ...] = Field(
         default_factory=tuple,
         description="Chronological sequence of prior attempts on the active payment.",
     )
-    historical_cases: Tuple[Mapping[str, Any], ...] = Field(
+    historical_cases: tuple[Mapping[str, Any], ...] = Field(
         default_factory=tuple,
         description="Top-K retrieved similar historical recovery cases without PII.",
     )
-    allowed_actions: Tuple[str, ...] = Field(
+    allowed_actions: tuple[str, ...] = Field(
         default_factory=tuple,
         description="List of action names permitted under active policy rules.",
     )
-    prohibited_actions: Tuple[str, ...] = Field(
+    prohibited_actions: tuple[str, ...] = Field(
         default_factory=tuple,
         description="List of action names strictly prohibited by active policy rules.",
     )
-    mandatory_fallback: Optional[str] = Field(
+    mandatory_fallback: str | None = Field(
         default=None,
         description="Mandatory fallback action string if applicable.",
     )
-    policy_constraints: Tuple[str, ...] = Field(
+    policy_constraints: tuple[str, ...] = Field(
         default_factory=tuple,
         description="Human-readable policy descriptions governing this recovery scenario.",
     )
@@ -181,12 +181,14 @@ class AgentDecisionPromptContext(BaseModel):
 
     @field_validator("recovery_attempt_history", "historical_cases", mode="after")
     @classmethod
-    def _freeze_list_of_mappings(cls, v: Any) -> Tuple[Mapping[str, Any], ...]:
+    def _freeze_list_of_mappings(cls, v: Any) -> tuple[Mapping[str, Any], ...]:
         return _freeze_nested(v) if v is not None else ()
 
-    @field_validator("allowed_actions", "prohibited_actions", "policy_constraints", mode="before")
+    @field_validator(
+        "allowed_actions", "prohibited_actions", "policy_constraints", mode="before"
+    )
     @classmethod
-    def _normalize_string_tuples(cls, v: Any) -> Tuple[str, ...]:
+    def _normalize_string_tuples(cls, v: Any) -> tuple[str, ...]:
         if v is None:
             return ()
         if not isinstance(v, (list, tuple, set)):
@@ -195,22 +197,24 @@ class AgentDecisionPromptContext(BaseModel):
 
     @field_validator("mandatory_fallback", mode="before")
     @classmethod
-    def _normalize_mandatory_fallback(cls, v: Any) -> Optional[str]:
+    def _normalize_mandatory_fallback(cls, v: Any) -> str | None:
         if v is None:
             return None
         clean = str(v).strip()
         return clean if clean else None
 
     @field_serializer("current_payment", "customer_profile")
-    def _serialize_mappings(self, v: Mapping[str, Any], _info: Any) -> Dict[str, Any]:
+    def _serialize_mappings(self, v: Mapping[str, Any], _info: Any) -> dict[str, Any]:
         return _unfreeze_for_serialization(v)
 
     @field_serializer("recovery_attempt_history", "historical_cases")
-    def _serialize_mapping_tuples(self, v: Tuple[Mapping[str, Any], ...], _info: Any) -> List[Dict[str, Any]]:
+    def _serialize_mapping_tuples(
+        self, v: tuple[Mapping[str, Any], ...], _info: Any
+    ) -> list[dict[str, Any]]:
         return _unfreeze_for_serialization(v)
 
     @field_serializer("allowed_actions", "prohibited_actions", "policy_constraints")
-    def _serialize_string_tuples(self, v: Tuple[str, ...], _info: Any) -> List[str]:
+    def _serialize_string_tuples(self, v: tuple[str, ...], _info: Any) -> list[str]:
         return list(v)
 
 
@@ -235,11 +239,11 @@ class AgentDecisionResult(BaseModel):
         default=True,
         description="True if recommendation was generated by an LLM; False if produced by deterministic fallback.",
     )
-    provider: Optional[str] = Field(
+    provider: str | None = Field(
         default=None,
         description="LLM provider name (e.g., 'openai', 'anthropic', 'mock_llm').",
     )
-    model_name: Optional[str] = Field(
+    model_name: str | None = Field(
         default=None,
         description="Specific model identifier used for decision generation.",
     )
@@ -247,11 +251,11 @@ class AgentDecisionResult(BaseModel):
         default=False,
         description="True if deterministic fallback was triggered due to LLM timeout, error, or unparseable response.",
     )
-    fallback_reason: Optional[str] = Field(
+    fallback_reason: str | None = Field(
         default=None,
         description="Diagnostic explanation for why fallback occurred, if applicable.",
     )
-    latency_ms: Optional[float] = Field(
+    latency_ms: float | None = Field(
         default=None,
         ge=0.0,
         description="Execution latency in milliseconds.",
@@ -267,7 +271,7 @@ class AgentDecisionResult(BaseModel):
 
     @field_validator("fallback_reason", "provider", "model_name", mode="before")
     @classmethod
-    def _normalize_optional_strings(cls, v: Any) -> Optional[str]:
+    def _normalize_optional_strings(cls, v: Any) -> str | None:
         if v is None:
             return None
         clean = str(v).strip()
@@ -291,7 +295,7 @@ class AgentDecisionResult(BaseModel):
         return _freeze_nested(v) if v is not None else types.MappingProxyType({})
 
     @field_serializer("metadata")
-    def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> Dict[str, Any]:
+    def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> dict[str, Any]:
         return _unfreeze_for_serialization(v)
 
     @model_validator(mode="after")

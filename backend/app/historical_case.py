@@ -6,12 +6,20 @@ historical payment recovery experience (HistoricalRecoveryCase and HistoricalAtt
 along with deterministic, side-effect-free mappers from domain and context contracts.
 """
 
-from datetime import datetime, timezone
 import types
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple, Union
+from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 from app.context import (
     CustomerContext,
@@ -49,7 +57,7 @@ def _unfreeze_for_serialization(val: Any) -> Any:
 
 
 # Supported domain status sets for recovery outcomes and attempt executions
-SUPPORTED_RECOVERY_STATUSES: Set[str] = {
+SUPPORTED_RECOVERY_STATUSES: set[str] = {
     "open",
     "in_progress",
     "recovered",
@@ -59,7 +67,7 @@ SUPPORTED_RECOVERY_STATUSES: Set[str] = {
     "pending",
 }
 
-SUPPORTED_ATTEMPT_STATUSES: Set[str] = {
+SUPPORTED_ATTEMPT_STATUSES: set[str] = {
     "pending",
     "succeeded",
     "failed",
@@ -78,14 +86,14 @@ class HistoricalAttempt(BaseModel):
         arbitrary_types_allowed=False,
     )
 
-    attempt_id: Optional[UUID] = None
+    attempt_id: UUID | None = None
     action: str
     status: str
     amount_recovered: float = Field(default=0.0, ge=0.0)
-    error_code: Optional[str] = None
-    external_reference: Optional[str] = None
-    created_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    error_code: str | None = None
+    external_reference: str | None = None
+    created_at: datetime | None = None
+    completed_at: datetime | None = None
 
     @field_validator("status", mode="before")
     @classmethod
@@ -96,7 +104,7 @@ class HistoricalAttempt(BaseModel):
         if normalized not in SUPPORTED_ATTEMPT_STATUSES:
             raise ValueError(
                 f"Invalid or unsupported attempt status '{v}'. "
-                f"Must be one of {sorted(list(SUPPORTED_ATTEMPT_STATUSES))}."
+                f"Must be one of {sorted(SUPPORTED_ATTEMPT_STATUSES)}."
             )
         return normalized
 
@@ -125,28 +133,28 @@ class HistoricalRecoveryCase(BaseModel):
 
     # Identifiers and traceability (No PII)
     payment_id: UUID
-    external_payment_id: Optional[str] = None
-    opportunity_id: Optional[UUID] = None
-    customer_id: Optional[UUID] = None
-    external_customer_id: Optional[str] = None
+    external_payment_id: str | None = None
+    opportunity_id: UUID | None = None
+    customer_id: UUID | None = None
+    external_customer_id: str | None = None
 
     # Payment details
     amount: float = Field(ge=0.0)
     currency: str = Field(default="INR")
     payment_method: str
-    failure_reason: Optional[str] = None
+    failure_reason: str | None = None
 
     # Recovery outcome and summary
     recovery_status: str
     amount_recovered: float = Field(default=0.0, ge=0.0)
-    successful_action: Optional[str] = None
+    successful_action: str | None = None
 
     # Chronologically ordered execution attempts
-    attempts: Tuple[HistoricalAttempt, ...] = Field(default_factory=tuple)
+    attempts: tuple[HistoricalAttempt, ...] = Field(default_factory=tuple)
 
     # Temporal & retrieval metadata
-    created_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    completed_at: datetime | None = None
     metadata: Mapping[str, Any] = Field(default_factory=dict)
 
     @field_validator("recovery_status", mode="before")
@@ -158,7 +166,7 @@ class HistoricalRecoveryCase(BaseModel):
         if normalized not in SUPPORTED_RECOVERY_STATUSES:
             raise ValueError(
                 f"Invalid or unsupported recovery status '{v}'. "
-                f"Must be one of {sorted(list(SUPPORTED_RECOVERY_STATUSES))}."
+                f"Must be one of {sorted(SUPPORTED_RECOVERY_STATUSES)}."
             )
         return normalized
 
@@ -171,7 +179,7 @@ class HistoricalRecoveryCase(BaseModel):
 
     @field_validator("attempts", mode="before")
     @classmethod
-    def _normalize_attempts(cls, v: Any) -> Tuple[Any, ...]:
+    def _normalize_attempts(cls, v: Any) -> tuple[Any, ...]:
         if v is None:
             return ()
         if isinstance(v, (list, tuple, set)):
@@ -203,8 +211,8 @@ class HistoricalRecoveryCase(BaseModel):
     @field_validator("attempts", mode="after")
     @classmethod
     def _sort_attempts(
-        cls, attempts: Tuple[HistoricalAttempt, ...]
-    ) -> Tuple[HistoricalAttempt, ...]:
+        cls, attempts: tuple[HistoricalAttempt, ...]
+    ) -> tuple[HistoricalAttempt, ...]:
         if not attempts:
             return ()
         # Deterministically sort attempts in chronological order
@@ -232,7 +240,7 @@ class HistoricalRecoveryCase(BaseModel):
         return _freeze_nested(v)
 
     @field_serializer("metadata")
-    def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> Dict[str, Any]:
+    def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> dict[str, Any]:
         return _unfreeze_for_serialization(v)
 
     @model_validator(mode="after")
@@ -252,12 +260,13 @@ class HistoricalRecoveryCase(BaseModel):
 
 def map_context_to_historical_case(
     payment: PaymentContext,
-    opportunity: Optional[RecoveryOpportunityContext] = None,
-    attempts: Optional[Sequence[Union[RecoveryAttemptContext, HistoricalAttempt, Dict[str, Any]]]] = None,
-    customer: Optional[CustomerContext] = None,
-    customer_id: Optional[UUID] = None,
-    external_customer_id: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
+    opportunity: RecoveryOpportunityContext | None = None,
+    attempts: Sequence[RecoveryAttemptContext | HistoricalAttempt | dict[str, Any]]
+    | None = None,
+    customer: CustomerContext | None = None,
+    customer_id: UUID | None = None,
+    external_customer_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> HistoricalRecoveryCase:
     """
     Deterministically map PaymentContext and related domain contexts into an immutable HistoricalRecoveryCase.
@@ -283,7 +292,7 @@ def map_context_to_historical_case(
 
     # Normalize and sort attempts
     raw_attempts = list(attempts) if attempts else []
-    converted_attempts: List[HistoricalAttempt] = []
+    converted_attempts: list[HistoricalAttempt] = []
     for att in raw_attempts:
         if isinstance(att, HistoricalAttempt):
             converted_attempts.append(att)
@@ -305,8 +314,8 @@ def map_context_to_historical_case(
 
     # Calculate recovered amount and successful action
     amount_recovered = 0.0
-    successful_action: Optional[str] = None
-    latest_completed_at: Optional[datetime] = None
+    successful_action: str | None = None
+    latest_completed_at: datetime | None = None
 
     for att in converted_attempts:
         if att.status == "succeeded":
@@ -334,14 +343,16 @@ def map_context_to_historical_case(
     # Ensure amount_recovered does not exceed payment amount
     amount_recovered = min(amount_recovered, payment.amount)
 
-    case_metadata: Dict[str, Any] = {}
+    case_metadata: dict[str, Any] = {}
     if metadata:
         case_metadata.update(metadata)
     if opportunity is not None:
         if opportunity.confidence is not None:
             case_metadata["confidence"] = opportunity.confidence
         if opportunity.recommended_action:
-            case_metadata["opportunity_recommended_action"] = opportunity.recommended_action
+            case_metadata["opportunity_recommended_action"] = (
+                opportunity.recommended_action
+            )
 
     return HistoricalRecoveryCase(
         payment_id=payment.payment_id,
@@ -365,9 +376,9 @@ def map_context_to_historical_case(
 
 def map_historical_payment_to_case(
     historical_payment: HistoricalPaymentContext,
-    customer_id: Optional[UUID] = None,
-    external_customer_id: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
+    customer_id: UUID | None = None,
+    external_customer_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> HistoricalRecoveryCase:
     """
     Deterministically map a HistoricalPaymentContext into a HistoricalRecoveryCase.
@@ -375,7 +386,11 @@ def map_historical_payment_to_case(
     recovery_status = (
         "recovered"
         if historical_payment.was_recovered
-        else ("failed" if historical_payment.status == "failed" else historical_payment.status)
+        else (
+            "failed"
+            if historical_payment.status == "failed"
+            else historical_payment.status
+        )
     )
     amount_recovered = (
         historical_payment.amount if historical_payment.was_recovered else 0.0
@@ -384,7 +399,7 @@ def map_historical_payment_to_case(
         historical_payment.recovery_action if historical_payment.was_recovered else None
     )
 
-    case_metadata: Dict[str, Any] = {
+    case_metadata: dict[str, Any] = {
         "recovery_attempts_count": historical_payment.recovery_attempts_count,
         "was_recovered": historical_payment.was_recovered,
     }
@@ -412,13 +427,13 @@ def map_historical_payment_to_case(
 
 def map_customer_recovery_context_to_cases(
     context: CustomerRecoveryContext,
-) -> List[HistoricalRecoveryCase]:
+) -> list[HistoricalRecoveryCase]:
     """
     Extract all historical recovery cases from a CustomerRecoveryContext.
 
     Includes the current payment (if resolved) and all prior historical payments.
     """
-    cases: List[HistoricalRecoveryCase] = []
+    cases: list[HistoricalRecoveryCase] = []
     customer_id = context.customer.customer_id
     external_customer_id = context.customer.external_customer_id
 

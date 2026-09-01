@@ -7,17 +7,16 @@ similarity search.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 from uuid import UUID
 
 from app.context import CustomerRecoveryContext
 from app.embedding_service import EmbeddingService
 from app.historical_retrieval import HistoricalCase
-from app.retrieval_document import RetrievalDocument
 from app.vector_index import VectorIndex, VectorSearchResult
 
 
-def _normalize_datetime(dt: Any) -> Optional[datetime]:
+def _normalize_datetime(dt: Any) -> datetime | None:
     """Safely parse and normalize datetime objects or ISO strings to UTC-aware datetime."""
     if isinstance(dt, datetime):
         if dt.tzinfo is None:
@@ -25,7 +24,7 @@ def _normalize_datetime(dt: Any) -> Optional[datetime]:
         return dt.astimezone(timezone.utc)
     if isinstance(dt, str) and dt.strip():
         raw_str = dt.strip()
-        if raw_str.endswith("Z") or raw_str.endswith("z"):
+        if raw_str.endswith(("Z", "z")):
             raw_str = raw_str[:-1] + "+00:00"
         try:
             parsed = datetime.fromisoformat(raw_str)
@@ -106,13 +105,17 @@ def _search_result_to_historical_case(result: VectorSearchResult) -> HistoricalC
         try:
             customer_id = UUID(raw_cust_id)
         except (ValueError, TypeError, AttributeError) as exc:
-            raise ValueError(f"Invalid customer_id in document metadata: {raw_cust_id!r}") from exc
+            raise ValueError(
+                f"Invalid customer_id in document metadata: {raw_cust_id!r}"
+            ) from exc
     else:
-        raise ValueError(f"Missing or invalid customer_id in document metadata: {raw_cust_id!r}")
+        raise ValueError(  # noqa: TRY004
+            f"Missing or invalid customer_id in document metadata: {raw_cust_id!r}"
+        )
 
     # Parse timestamps if present in metadata
-    created_at: Optional[datetime] = _normalize_datetime(meta.get("created_at"))
-    completed_at: Optional[datetime] = _normalize_datetime(meta.get("completed_at"))
+    created_at: datetime | None = _normalize_datetime(meta.get("created_at"))
+    completed_at: datetime | None = _normalize_datetime(meta.get("completed_at"))
 
     # Relevance score bounded strictly to [0.0, 1.0]
     bounded_relevance = round(max(0.0, min(1.0, result.similarity_score)), 4)
@@ -166,7 +169,7 @@ class SemanticHistoricalRetriever:
         self,
         context: CustomerRecoveryContext,
         top_k: int = 5,
-    ) -> List[HistoricalCase]:
+    ) -> list[HistoricalCase]:
         """
         Retrieve top-k semantically relevant historical recovery cases for the given context.
 
@@ -205,10 +208,10 @@ class SemanticHistoricalRetriever:
         # - Temporal boundary (exclude future payments after query payment)
         current_payment = context.current_payment
         current_payment_id = current_payment.payment_id if current_payment else None
-        current_customer_id_str = str(context.customer.customer_id)
+        str(context.customer.customer_id)
         current_created_at = current_payment.created_at if current_payment else None
 
-        filtered_cases: List[HistoricalCase] = []
+        filtered_cases: list[HistoricalCase] = []
         for result in search_results:
             doc = result.document
             meta = doc.metadata

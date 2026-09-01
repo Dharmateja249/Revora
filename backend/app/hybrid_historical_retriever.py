@@ -5,14 +5,13 @@ Combines deterministic domain-aware retrieval and dense semantic vector retrieva
 into a single, deduplicated, deterministically ranked list of HistoricalCase evidence.
 """
 
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 from uuid import UUID
 
 from app.context import CustomerRecoveryContext
 from app.historical_retrieval import HistoricalCase
 from app.historical_retriever import HistoricalRetriever
 from app.semantic_historical_retriever import SemanticHistoricalRetriever
-
 
 # Default RRF smoothing parameter (industry standard benchmark)
 DEFAULT_RRF_K: int = 60
@@ -40,11 +39,11 @@ class HybridHistoricalRetriever:
 
     def __init__(
         self,
-        deterministic_retriever: Optional[HistoricalRetriever] = None,
-        semantic_retriever: Optional[SemanticHistoricalRetriever] = None,
+        deterministic_retriever: HistoricalRetriever | None = None,
+        semantic_retriever: SemanticHistoricalRetriever | None = None,
         rrf_k: int = DEFAULT_RRF_K,
-        deterministic_fetch_k: Optional[int] = None,
-        semantic_fetch_k: Optional[int] = None,
+        deterministic_fetch_k: int | None = None,
+        semantic_fetch_k: int | None = None,
     ):
         if not isinstance(rrf_k, int) or isinstance(rrf_k, bool) or rrf_k <= 0:
             raise ValueError(f"rrf_k must be a positive integer, got: {rrf_k!r}")
@@ -54,9 +53,7 @@ class HybridHistoricalRetriever:
             if deterministic_retriever is not None
             else HistoricalRetriever()
         )
-        self.semantic_retriever: Optional[SemanticHistoricalRetriever] = (
-            semantic_retriever
-        )
+        self.semantic_retriever: SemanticHistoricalRetriever | None = semantic_retriever
         self.rrf_k = rrf_k
         self.deterministic_fetch_k = deterministic_fetch_k
         self.semantic_fetch_k = semantic_fetch_k
@@ -65,7 +62,7 @@ class HybridHistoricalRetriever:
         self,
         context: CustomerRecoveryContext,
         top_k: int = 5,
-    ) -> List[HistoricalCase]:
+    ) -> list[HistoricalCase]:
         """
         Retrieve and fuse historical cases using Reciprocal Rank Fusion.
 
@@ -106,7 +103,7 @@ class HybridHistoricalRetriever:
 
         # 3. Accumulate RRF scores and track per-retriever rank positions
         # Map: payment_id -> dict of accumulator signals
-        candidates: Dict[UUID, Dict[str, Any]] = {}
+        candidates: dict[UUID, dict[str, Any]] = {}
 
         for rank_1_based, case in enumerate(det_cases, start=1):
             pid = case.payment_id
@@ -152,7 +149,7 @@ class HybridHistoricalRetriever:
         # 3. Sum of raw relevance scores descending
         # 4. Created_at timestamp descending (most recent first)
         # 5. Payment ID string ascending (lexicographical UUID)
-        def sort_key(item: Tuple[UUID, Dict[str, Any]]):
+        def sort_key(item: tuple[UUID, dict[str, Any]]):
             pid, data = item
             case: HistoricalCase = data["case"]
             rrf_score = data["rrf_score"]
@@ -174,7 +171,7 @@ class HybridHistoricalRetriever:
         # Theoretical maximum RRF score for 2 retrievers when a document ranks #1 in both
         max_theoretical_rrf = 2.0 / (self.rrf_k + 1.0)
 
-        fused_cases: List[HistoricalCase] = []
+        fused_cases: list[HistoricalCase] = []
         for pid, data in sorted_candidates[:top_k]:
             base_case: HistoricalCase = data["case"]
             raw_rrf = data["rrf_score"]
@@ -185,7 +182,7 @@ class HybridHistoricalRetriever:
             )
 
             # Build comprehensive fusion metadata
-            fusion_meta: Dict[str, Any] = {
+            fusion_meta: dict[str, Any] = {
                 **base_case.metadata,
                 "fusion_method": "rrf",
                 "rrf_k": self.rrf_k,
@@ -221,11 +218,11 @@ class HybridHistoricalRetriever:
 
 def retrieve_hybrid_historical_cases(
     context: CustomerRecoveryContext,
-    deterministic_retriever: Optional[HistoricalRetriever] = None,
-    semantic_retriever: Optional[SemanticHistoricalRetriever] = None,
+    deterministic_retriever: HistoricalRetriever | None = None,
+    semantic_retriever: SemanticHistoricalRetriever | None = None,
     top_k: int = 5,
     rrf_k: int = DEFAULT_RRF_K,
-) -> List[HistoricalCase]:
+) -> list[HistoricalCase]:
     """
     Public entrypoint for hybrid historical case retrieval with Reciprocal Rank Fusion.
     """

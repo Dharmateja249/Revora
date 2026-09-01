@@ -9,10 +9,9 @@ with strict schema validation, deduplication, and idempotent execution.
 import argparse
 import csv
 import logging
-from pathlib import Path
 import sys
-from typing import Any, Dict, List, Optional, Set
-import uuid
+from pathlib import Path
+from typing import Any
 
 # Ensure backend root is in sys.path when executed directly as a script
 backend_root = Path(__file__).resolve().parent.parent
@@ -24,18 +23,17 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal, init_db
 from app.models import (
+    AuditEvent,
     Customer,
     Payment,
-    RecoveryOpportunity,
     RecoveryAttempt,
-    AuditEvent,
-    utc_now,
+    RecoveryOpportunity,
 )
 
 logger = logging.getLogger("revora.historical_data")
 
 # Complete list of mandatory columns expected in the historical CSV dataset
-EXPECTED_CSV_COLUMNS: List[str] = [
+EXPECTED_CSV_COLUMNS: list[str] = [
     "record_id",
     "customer_id",
     "payment_id",
@@ -112,7 +110,7 @@ def load_historical_data(
     db_session: Session,
     csv_path: str | Path = "data/historical_recovery_data.csv",
     batch_commit_size: int = 500,
-) -> Dict[str, int]:
+) -> dict[str, int]:
     """
     Ingest verified historical recovery data from a CSV file into the database.
 
@@ -137,17 +135,21 @@ def load_historical_data(
 
     # In-memory tracking caches to avoid repetitive database lookups and prevent duplicates
     # Pre-populate with existing records from the database for full idempotency across runs
-    existing_customers: Dict[str, Customer] = {
+    existing_customers: dict[str, Customer] = {
         c.external_customer_id: c
-        for c in db_session.query(Customer).filter(Customer.external_customer_id.isnot(None)).all()
+        for c in db_session.query(Customer)
+        .filter(Customer.external_customer_id.isnot(None))
+        .all()
     }
 
-    existing_payments: Dict[str, Payment] = {
+    existing_payments: dict[str, Payment] = {
         p.external_payment_id: p
-        for p in db_session.query(Payment).filter(Payment.external_payment_id.isnot(None)).all()
+        for p in db_session.query(Payment)
+        .filter(Payment.external_payment_id.isnot(None))
+        .all()
     }
 
-    existing_attempts_by_ref: Set[str] = {
+    existing_attempts_by_ref: set[str] = {
         a.external_reference
         for a in db_session.query(RecoveryAttempt.external_reference)
         .filter(RecoveryAttempt.external_reference.isnot(None))
@@ -165,17 +167,19 @@ def load_historical_data(
     }
 
     # Read and parse all CSV rows with normalized headers
-    records: List[Dict[str, Any]] = []
+    records: list[dict[str, Any]] = []
     with open(path, mode="r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         if reader.fieldnames:
-            reader.fieldnames = [col.strip() for col in reader.fieldnames if col is not None]
+            reader.fieldnames = [
+                col.strip() for col in reader.fieldnames if col is not None
+            ]
         for row in reader:
             clean_row = {k.strip(): v for k, v in row.items() if k is not None}
             records.append(clean_row)
 
     # Sort deterministically by payment_id and attempt_number
-    def sort_key(r: Dict[str, Any]):
+    def sort_key(r: dict[str, Any]):
         return (r["payment_id"], int(r.get("attempt_number", 1)))
 
     records.sort(key=sort_key)
@@ -214,9 +218,9 @@ def load_historical_data(
         # do not leave partially created domain entities or audit events
         try:
             with db_session.begin_nested():
-                new_customer: Optional[Customer] = None
-                new_payment: Optional[Payment] = None
-                new_opportunity: Optional[RecoveryOpportunity] = None
+                new_customer: Customer | None = None
+                new_payment: Payment | None = None
+                new_opportunity: RecoveryOpportunity | None = None
 
                 # 1. Customer Resolution / Creation
                 if cust_id in existing_customers:
@@ -356,7 +360,9 @@ def main():
     )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+    )
 
     if args.init_db:
         logger.info("Initializing database schema...")

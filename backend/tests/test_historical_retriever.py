@@ -20,33 +20,31 @@ Tests:
 16. Standalone execution with only CustomerRecoveryContext (zero DB)
 """
 
-from datetime import datetime, timezone, timedelta
 import uuid
-import pytest
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import sessionmaker
+from datetime import datetime, timedelta, timezone
 
-from app.database import Base
-from app.models import (
-    Customer,
-    Payment,
-    RecoveryOpportunity,
-    RecoveryAttempt,
-)
+import pytest
 from app.context import (
     CustomerContext,
     CustomerRecoveryContext,
-    CustomerRecoveryStatsContext,
     HistoricalPaymentContext,
     PaymentContext,
-    RecoveryAttemptContext,
     RecoveryOpportunityContext,
 )
+from app.database import Base
 from app.historical_retrieval import HistoricalCase
 from app.historical_retriever import (
     HistoricalRetriever,
     retrieve_historical_cases,
 )
+from app.models import (
+    Customer,
+    Payment,
+    RecoveryAttempt,
+    RecoveryOpportunity,
+)
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture

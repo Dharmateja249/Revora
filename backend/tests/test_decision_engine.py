@@ -17,26 +17,24 @@ Verifies:
 13. Schema immutability and confidence score bounds [0.0, 1.0]
 """
 
-from datetime import datetime, timezone
 import uuid
-import pytest
-from pydantic import ValidationError
+from datetime import datetime, timezone
 
+import pytest
 from app.context import (
     CustomerContext,
     CustomerRecoveryContext,
     CustomerRecoveryStatsContext,
-    HistoricalPaymentContext,
     PaymentContext,
     RecoveryAttemptContext,
     RecoveryOpportunityContext,
 )
 from app.decision_engine import (
-    DecisionEngine,
     RecoveryAction,
     RecoveryDecision,
     evaluate_recovery_decision,
 )
+from pydantic import ValidationError
 
 
 def _build_test_context(
@@ -44,9 +42,9 @@ def _build_test_context(
     payment_method: str = "card",
     opp_status: str = "open",
     payment_status: str = "failed",
-    current_attempts: list = None,
-    hist_successful_actions: list = None,
-    hist_failed_actions: list = None,
+    current_attempts: list | None = None,
+    hist_successful_actions: list | None = None,
+    hist_failed_actions: list | None = None,
     recovery_rate: float = 0.0,
     total_cust_payments: int = 5,
 ) -> CustomerRecoveryContext:
@@ -124,7 +122,9 @@ def test_max_attempts_exceeded_returns_no_action():
     now = datetime.now(timezone.utc)
     attempts = [
         RecoveryAttemptContext(action="retry_payment", status="failed", created_at=now),
-        RecoveryAttemptContext(action="wait_and_retry", status="failed", created_at=now),
+        RecoveryAttemptContext(
+            action="wait_and_retry", status="failed", created_at=now
+        ),
         RecoveryAttemptContext(action="payment_link", status="failed", created_at=now),
     ]
     context = _build_test_context(current_attempts=attempts)
@@ -147,14 +147,18 @@ def test_transient_technical_failure_progression():
     assert d1.confidence == 0.85
 
     # 2nd attempt: wait and retry
-    att1 = [RecoveryAttemptContext(action="retry_payment", status="failed", created_at=now)]
+    att1 = [
+        RecoveryAttemptContext(action="retry_payment", status="failed", created_at=now)
+    ]
     ctx2 = _build_test_context(failure_reason="bank_server_down", current_attempts=att1)
     d2 = evaluate_recovery_decision(ctx2)
     assert d2.recommended_action == RecoveryAction.WAIT_AND_RETRY
     assert d2.confidence == 0.75
 
     # 3rd attempt: payment link fallback
-    att2 = att1 + [RecoveryAttemptContext(action="wait_and_retry", status="failed", created_at=now)]
+    att2 = att1 + [
+        RecoveryAttemptContext(action="wait_and_retry", status="failed", created_at=now)
+    ]
     ctx3 = _build_test_context(failure_reason="bank_server_down", current_attempts=att2)
     d3 = evaluate_recovery_decision(ctx3)
     assert d3.recommended_action == RecoveryAction.PAYMENT_LINK
@@ -168,7 +172,9 @@ def test_permanent_credential_failure():
         decision = evaluate_recovery_decision(ctx)
         assert decision.recommended_action == RecoveryAction.CHANGE_PAYMENT_METHOD
         assert decision.confidence == 0.90
-        assert decision.decision_basis["rule_matched"] == "PermanentCredentialFailureRule"
+        assert (
+            decision.decision_basis["rule_matched"] == "PermanentCredentialFailureRule"
+        )
 
 
 def test_customer_authentication_failure():
@@ -178,7 +184,10 @@ def test_customer_authentication_failure():
         decision = evaluate_recovery_decision(ctx)
         assert decision.recommended_action == RecoveryAction.PAYMENT_LINK
         assert decision.confidence == 0.80
-        assert decision.decision_basis["rule_matched"] == "CustomerInteractionPaymentLinkRule"
+        assert (
+            decision.decision_basis["rule_matched"]
+            == "CustomerInteractionPaymentLinkRule"
+        )
 
 
 def test_otp_timeout_classified_as_customer_interaction_regression():
@@ -193,8 +202,9 @@ def test_otp_timeout_classified_as_customer_interaction_regression():
     assert decision.recommended_action == RecoveryAction.PAYMENT_LINK
     assert decision.recommended_action != RecoveryAction.RETRY_PAYMENT
     assert decision.confidence == 0.80
-    assert decision.decision_basis["rule_matched"] == "CustomerInteractionPaymentLinkRule"
-
+    assert (
+        decision.decision_basis["rule_matched"] == "CustomerInteractionPaymentLinkRule"
+    )
 
 
 def test_insufficient_funds_with_historical_affinity():
@@ -350,7 +360,10 @@ def test_decision_basis_recursive_immutability():
     mutable_input_basis["nested_metadata"]["gateway"] = "external_gateway"
 
     assert decision.decision_basis["rule_matched"] == "TestRule"
-    assert decision.decision_basis["attempted_actions"] == ("retry_payment", "wait_and_retry")
+    assert decision.decision_basis["attempted_actions"] == (
+        "retry_payment",
+        "wait_and_retry",
+    )
     assert decision.decision_basis["nested_metadata"]["gateway"] == "stripe"
 
 

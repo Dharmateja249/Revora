@@ -5,35 +5,36 @@ Provides filesystem-based JSON storage, retrieval, atomic write operations,
 and historical benchmark tracking for EvaluationReport artifacts.
 """
 
-from datetime import datetime, timezone
 import json
 import os
-from pathlib import Path
 import tempfile
-from typing import Any, Dict, List, Optional, Union
+from pathlib import Path
+from typing import Any
 
 from app.evaluation.schemas import EvaluationReport
 
+DEFAULT_EVALUATION_DIR = (
+    Path(__file__).resolve().parent.parent.parent / "evaluation_results"
+)
 
-DEFAULT_EVALUATION_DIR = Path(__file__).resolve().parent.parent.parent / "evaluation_results"
 
-
-def get_evaluation_directory(custom_dir: Optional[Union[str, Path]] = None) -> Path:
+def get_evaluation_directory(custom_dir: str | Path | None = None) -> Path:
     """Resolve and ensure the target directory for persisting evaluation reports."""
     path = Path(custom_dir) if custom_dir is not None else DEFAULT_EVALUATION_DIR
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def _atomic_write_json(file_path: Path, data: Dict[str, Any]) -> None:
+def _atomic_write_json(file_path: Path, data: dict[str, Any]) -> None:
     """Atomically write JSON payload to file using a temporary file in the same directory."""
     parent_dir = file_path.parent
     parent_dir.mkdir(parents=True, exist_ok=True)
 
     json_content = json.dumps(data, indent=2, sort_keys=True)
 
-    # Create temporary file in the same filesystem/directory to ensure atomic rename
-    temp_file = tempfile.NamedTemporaryFile(
+    # Create temporary file in the same filesystem/directory to ensure atomic rename.
+    # On Windows, atomic os.replace requires closing the file handle first.
+    temp_file = tempfile.NamedTemporaryFile(  # noqa: SIM115
         mode="w",
         encoding="utf-8",
         dir=parent_dir,
@@ -55,7 +56,7 @@ def _atomic_write_json(file_path: Path, data: Dict[str, Any]) -> None:
 
 def save_report(
     report: EvaluationReport,
-    directory: Optional[Union[str, Path]] = None,
+    directory: str | Path | None = None,
     overwrite: bool = False,
 ) -> Path:
     """
@@ -96,7 +97,7 @@ def save_report(
 
 def load_report(
     report_id: str,
-    directory: Optional[Union[str, Path]] = None,
+    directory: str | Path | None = None,
 ) -> EvaluationReport:
     """
     Load an EvaluationReport by its report_id.
@@ -122,7 +123,9 @@ def load_report(
 
     file_path = target_dir / clean_id
     if not file_path.exists():
-        raise FileNotFoundError(f"Evaluation report '{report_id}' not found at {file_path}")
+        raise FileNotFoundError(
+            f"Evaluation report '{report_id}' not found at {file_path}"
+        )
 
     try:
         raw_text = file_path.read_text(encoding="utf-8")
@@ -131,12 +134,14 @@ def load_report(
     except json.JSONDecodeError as exc:
         raise ValueError(f"Corrupted JSON in report file {file_path}: {exc}") from exc
     except Exception as exc:
-        raise ValueError(f"Invalid evaluation report schema in {file_path}: {exc}") from exc
+        raise ValueError(
+            f"Invalid evaluation report schema in {file_path}: {exc}"
+        ) from exc
 
 
 def load_latest_report(
-    directory: Optional[Union[str, Path]] = None,
-) -> Optional[EvaluationReport]:
+    directory: str | Path | None = None,
+) -> EvaluationReport | None:
     """
     Load the most recently persisted EvaluationReport (latest.json).
 
@@ -149,7 +154,7 @@ def load_latest_report(
     if latest_path.exists():
         try:
             return load_report("latest", directory=target_dir)
-        except Exception:
+        except (ValueError, OSError, Exception):  # noqa: BLE001, S110
             pass
 
     # Fallback to sorting all report JSONs by modification time
@@ -165,8 +170,8 @@ def load_latest_report(
 
 
 def list_reports(
-    directory: Optional[Union[str, Path]] = None,
-) -> List[str]:
+    directory: str | Path | None = None,
+) -> list[str]:
     """
     List all persisted report IDs in deterministic alphabetical order.
     """
@@ -174,7 +179,5 @@ def list_reports(
     if not target_dir.exists():
         return []
 
-    report_ids = [
-        p.stem for p in target_dir.glob("*.json") if p.name != "latest.json"
-    ]
+    report_ids = [p.stem for p in target_dir.glob("*.json") if p.name != "latest.json"]
     return sorted(report_ids)

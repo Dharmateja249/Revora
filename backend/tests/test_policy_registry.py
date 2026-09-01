@@ -2,8 +2,6 @@
 Unit tests for Revora Policy Registry.
 """
 
-import pytest
-
 from app.decision_engine import RecoveryAction
 from app.policies.registry import (
     DEFAULT_POLICY_VERSION,

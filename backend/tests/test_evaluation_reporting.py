@@ -7,16 +7,10 @@ empty benchmark handling, and artifact persistence.
 
 import json
 from pathlib import Path
-from typing import Dict
 from uuid import uuid4
-import pytest
 
-from app.evaluation.benchmark import run_benchmark
 from app.evaluation.regression import (
     EvaluationThresholds,
-    RegressionAnalysis,
-    RegressionFinding,
-    RegressionSeverity,
     detect_regressions,
 )
 from app.evaluation.reporting import (
@@ -28,7 +22,6 @@ from app.evaluation.schemas import (
     RetrievalEvalResult,
     RetrieverBenchmarkReport,
 )
-from tests.fixtures.retrieval_golden_dataset import get_golden_evaluation_cases
 
 
 def _make_dummy_report(
@@ -156,8 +149,12 @@ def test_generate_json_report_determinism():
 
 
 def test_generate_markdown_report_comprehensive():
-    rep_det = _make_dummy_report("DeterministicHistoricalRetriever", mrr=0.98, latency_ms=0.05)
-    rep_sem = _make_dummy_report("SemanticHistoricalRetriever", mrr=0.92, latency_ms=1.10)
+    rep_det = _make_dummy_report(
+        "DeterministicHistoricalRetriever", mrr=0.98, latency_ms=0.05
+    )
+    rep_sem = _make_dummy_report(
+        "SemanticHistoricalRetriever", mrr=0.92, latency_ms=1.10
+    )
     rep_hyb = _make_dummy_report("HybridHistoricalRetriever", mrr=0.98, latency_ms=1.25)
     reports = {
         "DeterministicHistoricalRetriever": rep_det,
@@ -238,5 +235,6 @@ def test_app_evaluation_isolated_import():
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
+        check=False,
     )
     assert result.returncode == 0, f"Import failed: {result.stderr}"

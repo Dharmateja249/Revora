@@ -11,12 +11,10 @@ Tests:
 7. Response isolation: ensures response DTO exposes no raw ORM objects or sensitive PII
 """
 
-from datetime import datetime, timezone, timedelta
 import uuid
-import pytest
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import sessionmaker
+from datetime import timedelta
 
+import pytest
 from app.context import (
     CustomerNotFoundError,
     PaymentCustomerMismatchError,
@@ -27,7 +25,6 @@ from app.database import Base
 from app.decision_engine import DecisionEngine, RecoveryAction, RecoveryDecision
 from app.embedding_service import get_embedding_service
 from app.historical_retrieval import HistoricalCase
-from app.hybrid_historical_retriever import HybridHistoricalRetriever
 from app.models import AuditEvent, Customer, Payment, RecoveryOpportunity, utc_now
 from app.recovery_service import RecoveryService
 from app.retrieval_document import historical_case_to_document
@@ -35,9 +32,9 @@ from app.schemas.recovery import (
     RecoveryEvaluationRequest,
     RecoveryEvaluationResponse,
 )
-from app.semantic_historical_retriever import SemanticHistoricalRetriever
 from app.vector_index import VectorIndex
-
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
 
 # ============================================================================
 # Database Test Fixtures
@@ -180,7 +177,7 @@ def test_recovery_service_happy_path(in_memory_db):
 
 def test_recovery_service_with_rag_disabled(in_memory_db):
     """Verify that use_rag=False disables historical retrieval and executes pure rule baseline."""
-    customer, payment, opportunity = _seed_customer_payment_opportunity(in_memory_db)
+    customer, payment, _opportunity = _seed_customer_payment_opportunity(in_memory_db)
 
     service = RecoveryService()
     request = RecoveryEvaluationRequest(
@@ -227,7 +224,7 @@ class MockRetriever:
 
 def test_recovery_service_dependency_injection(in_memory_db):
     """Verify custom decision engine and retriever can be injected and executed."""
-    customer, payment, opportunity = _seed_customer_payment_opportunity(in_memory_db)
+    customer, payment, _opportunity = _seed_customer_payment_opportunity(in_memory_db)
 
     mock_hist_case = HistoricalCase(
         payment_id=uuid.uuid4(),
@@ -292,7 +289,7 @@ def test_payment_not_found_raises_exception(in_memory_db):
 
 def test_payment_customer_mismatch_raises_exception(in_memory_db):
     """Verify PaymentCustomerMismatchError propagates when payment belongs to another customer."""
-    customer1, payment1, _ = _seed_customer_payment_opportunity(in_memory_db)
+    _customer1, payment1, _ = _seed_customer_payment_opportunity(in_memory_db)
     customer2, _, _ = _seed_customer_payment_opportunity(in_memory_db)
 
     service = RecoveryService()
@@ -330,7 +327,7 @@ def test_missing_opportunity_raises_exception(in_memory_db):
 
 def test_transaction_rollback_on_persistence_failure(in_memory_db):
     """Verify transaction is rolled back and no partial audit record persists on DB failure."""
-    customer, payment, opportunity = _seed_customer_payment_opportunity(in_memory_db)
+    customer, payment, _opportunity = _seed_customer_payment_opportunity(in_memory_db)
 
     service = RecoveryService()
     request = RecoveryEvaluationRequest(
@@ -356,7 +353,7 @@ def test_transaction_rollback_on_persistence_failure(in_memory_db):
 
 def test_response_isolation_no_pii_leaked(in_memory_db):
     """Verify response DTO contains no customer email or raw ORM objects."""
-    customer, payment, opportunity = _seed_customer_payment_opportunity(in_memory_db)
+    customer, payment, _opportunity = _seed_customer_payment_opportunity(in_memory_db)
     service = RecoveryService()
     request = RecoveryEvaluationRequest(
         customer_id=customer.id,

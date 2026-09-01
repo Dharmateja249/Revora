@@ -8,11 +8,15 @@ deterministic rules augmented by empirical HistoricalCase evidence to produce a
 RecoveryDecision recommendation without LLMs.
 """
 
-from collections import defaultdict
-from enum import Enum
 import types
-from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
-from uuid import UUID
+from collections import defaultdict
+from collections.abc import Mapping, Sequence
+from enum import Enum
+from typing import (
+    TYPE_CHECKING,
+    Any,
+)
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.context import CustomerRecoveryContext
@@ -77,7 +81,7 @@ class RecoveryDecision(BaseModel):
 
 
 # Failure Reason Classification Sets (Normalized lowercase)
-PERMANENT_FAILURE_REASONS: Set[str] = {
+PERMANENT_FAILURE_REASONS: set[str] = {
     "card_expired",
     "expired_card",
     "invalid_card",
@@ -92,7 +96,7 @@ PERMANENT_FAILURE_REASONS: Set[str] = {
     "do_not_honor",
 }
 
-TRANSIENT_TECHNICAL_REASONS: Set[str] = {
+TRANSIENT_TECHNICAL_REASONS: set[str] = {
     "bank_server_down",
     "bank_timeout",
     "network_timeout",
@@ -104,7 +108,7 @@ TRANSIENT_TECHNICAL_REASONS: Set[str] = {
     "timeout",
 }
 
-INSUFFICIENT_FUNDS_REASONS: Set[str] = {
+INSUFFICIENT_FUNDS_REASONS: set[str] = {
     "insufficient_funds",
     "low_balance",
     "balance_insufficient",
@@ -113,7 +117,7 @@ INSUFFICIENT_FUNDS_REASONS: Set[str] = {
     "exceeds_limit",
 }
 
-CUSTOMER_INTERACTION_REASONS: Set[str] = {
+CUSTOMER_INTERACTION_REASONS: set[str] = {
     "authentication_failed",
     "otp_expired",
     "otp_timeout",
@@ -125,7 +129,7 @@ CUSTOMER_INTERACTION_REASONS: Set[str] = {
 }
 
 
-def normalize_action_name(action_str: Optional[str]) -> Optional[RecoveryAction]:
+def normalize_action_name(action_str: str | None) -> RecoveryAction | None:
     """
     Map raw or historical action strings to standard RecoveryAction enum members.
     """
@@ -173,8 +177,8 @@ class HistoricalEvidenceSynthesizer:
     @classmethod
     def synthesize(
         cls,
-        cases: Optional[Sequence[HistoricalCase]],
-    ) -> Dict[str, Any]:
+        cases: Sequence[HistoricalCase] | None,
+    ) -> dict[str, Any]:
         """
         Aggregate and score retrieved cases by action.
         """
@@ -191,7 +195,8 @@ class HistoricalEvidenceSynthesizer:
         filtered = [
             c
             for c in cases
-            if c.relevance_score is not None and c.relevance_score >= cls.MIN_RELEVANCE_THRESHOLD
+            if c.relevance_score is not None
+            and c.relevance_score >= cls.MIN_RELEVANCE_THRESHOLD
         ]
         if not filtered:
             return {
@@ -203,9 +208,9 @@ class HistoricalEvidenceSynthesizer:
                 "best_action_score": 0.0,
             }
 
-        action_scores: Dict[RecoveryAction, float] = defaultdict(float)
-        action_success_counts: Dict[RecoveryAction, int] = defaultdict(int)
-        action_failure_counts: Dict[RecoveryAction, int] = defaultdict(int)
+        action_scores: dict[RecoveryAction, float] = defaultdict(float)
+        action_success_counts: dict[RecoveryAction, int] = defaultdict(int)
+        action_failure_counts: dict[RecoveryAction, int] = defaultdict(int)
 
         for case in filtered:
             norm_action = normalize_action_name(case.recovery_action)
@@ -230,7 +235,7 @@ class HistoricalEvidenceSynthesizer:
         }
 
         # Find best net positive action
-        best_action: Optional[RecoveryAction] = None
+        best_action: RecoveryAction | None = None
         best_score: float = 0.0
         for act, net_score in action_scores.items():
             if net_score > best_score:
@@ -242,9 +247,15 @@ class HistoricalEvidenceSynthesizer:
             "retrieved_cases_count": len(cases),
             "valid_cases_count": len(filtered),
             "top_case": top_case_summary,
-            "action_net_scores": {k.value: round(v, 4) for k, v in action_scores.items()},
-            "action_success_counts": {k.value: v for k, v in action_success_counts.items()},
-            "action_failure_counts": {k.value: v for k, v in action_failure_counts.items()},
+            "action_net_scores": {
+                k.value: round(v, 4) for k, v in action_scores.items()
+            },
+            "action_success_counts": {
+                k.value: v for k, v in action_success_counts.items()
+            },
+            "action_failure_counts": {
+                k.value: v for k, v in action_failure_counts.items()
+            },
             "best_action": best_action,
             "best_action_score": round(best_score, 4),
         }
@@ -261,7 +272,7 @@ class DecisionEngine:
     def __init__(
         self,
         max_attempts: int = 3,
-        retriever: Optional[HybridHistoricalRetriever] = None,
+        retriever: HybridHistoricalRetriever | None = None,
     ):
         self.max_attempts = max_attempts
         self.retriever = retriever
@@ -269,7 +280,7 @@ class DecisionEngine:
     def _evaluate_candidate(
         self,
         context: CustomerRecoveryContext,
-        historical_cases: Optional[List[HistoricalCase]] = None,
+        historical_cases: list[HistoricalCase] | None = None,
     ) -> RecoveryDecision:
         """
         Evaluate context and historical evidence to produce a candidate RecoveryDecision.
@@ -293,7 +304,7 @@ class DecisionEngine:
         # 3. Extract normalized attempt history on this payment
         raw_attempts = context.current_payment_attempts or []
         attempt_count = len(raw_attempts)
-        attempted_actions_normalized: Set[RecoveryAction] = set()
+        attempted_actions_normalized: set[RecoveryAction] = set()
         for att in raw_attempts:
             norm = normalize_action_name(att.action)
             if norm:
@@ -306,9 +317,11 @@ class DecisionEngine:
             else ""
         )
         failure_reason = failure_reason_raw.strip().lower()
-        payment_method = current_payment.payment_method if current_payment else "unknown"
+        payment_method = (
+            current_payment.payment_method if current_payment else "unknown"
+        )
 
-        base_basis: Dict[str, Any] = {
+        base_basis: dict[str, Any] = {
             "failure_reason": failure_reason_raw,
             "payment_method": payment_method,
             "current_attempt_count": attempt_count,
@@ -320,7 +333,7 @@ class DecisionEngine:
         }
 
         # 5. Category classification
-        exact_category: Optional[str] = None
+        exact_category: str | None = None
         if failure_reason in PERMANENT_FAILURE_REASONS:
             exact_category = "permanent"
         elif failure_reason in CUSTOMER_INTERACTION_REASONS:
@@ -357,10 +370,16 @@ class DecisionEngine:
                 recommended_action=RecoveryAction.NO_ACTION,
                 reason="No active payment or recovery opportunity present in context.",
                 confidence=1.0,
-                decision_basis={**base_basis, "rule_matched": "NoActiveOpportunityRule"},
+                decision_basis={
+                    **base_basis,
+                    "rule_matched": "NoActiveOpportunityRule",
+                },
             )
 
-        if current_opportunity.status == "recovered" or current_payment.status == "succeeded":
+        if (
+            current_opportunity.status == "recovered"
+            or current_payment.status == "succeeded"
+        ):
             return RecoveryDecision(
                 recommended_action=RecoveryAction.NO_ACTION,
                 reason="Payment or recovery opportunity is already resolved and recovered.",
@@ -369,15 +388,18 @@ class DecisionEngine:
             )
 
         # Rule 2: Max Attempts Exceeded or Opportunity in Terminal State
-        if (
-            attempt_count >= self.max_attempts
-            or current_opportunity.status in ("failed", "abandoned")
+        if attempt_count >= self.max_attempts or current_opportunity.status in (
+            "failed",
+            "abandoned",
         ):
             return RecoveryDecision(
                 recommended_action=RecoveryAction.NO_ACTION,
                 reason=f"Maximum recovery attempts ({self.max_attempts}) reached or opportunity is in terminal state.",
                 confidence=0.95,
-                decision_basis={**base_basis, "rule_matched": "MaxAttemptsExceededRule"},
+                decision_basis={
+                    **base_basis,
+                    "rule_matched": "MaxAttemptsExceededRule",
+                },
             )
 
         # Rule 3: Permanent Credential Failure
@@ -386,7 +408,10 @@ class DecisionEngine:
                 recommended_action=RecoveryAction.CHANGE_PAYMENT_METHOD,
                 reason=f"Permanent payment failure detected ({failure_reason_raw}); customer must update payment method.",
                 confidence=0.90,
-                decision_basis={**base_basis, "rule_matched": "PermanentCredentialFailureRule"},
+                decision_basis={
+                    **base_basis,
+                    "rule_matched": "PermanentCredentialFailureRule",
+                },
             )
 
         # =========================================================================
@@ -399,7 +424,10 @@ class DecisionEngine:
                 base_conf = 0.85
                 reason = "Transient network or bank gateway timeout detected; immediate automatic retry is recommended."
                 rule_name = "TransientTechnicalImmediateRetryRule"
-                if evidence["has_evidence"] and evidence["best_action"] == RecoveryAction.RETRY_PAYMENT:
+                if (
+                    evidence["has_evidence"]
+                    and evidence["best_action"] == RecoveryAction.RETRY_PAYMENT
+                ):
                     base_conf = min(0.95, base_conf + 0.05)
                     reason += f" (Supported by {evidence['valid_cases_count']} similar historical recovery cases)."
                 return RecoveryDecision(
@@ -423,7 +451,10 @@ class DecisionEngine:
                         recommended_action=RecoveryAction.PAYMENT_LINK,
                         reason="Immediate retry failed; empirical historical evidence indicates high payment link recovery rate for this customer.",
                         confidence=0.80,
-                        decision_basis={**base_basis, "rule_matched": "TransientTechnicalHistoricalLinkPivotRule"},
+                        decision_basis={
+                            **base_basis,
+                            "rule_matched": "TransientTechnicalHistoricalLinkPivotRule",
+                        },
                     )
                 return RecoveryDecision(
                     recommended_action=RecoveryAction.WAIT_AND_RETRY,
@@ -436,7 +467,10 @@ class DecisionEngine:
                     recommended_action=RecoveryAction.PAYMENT_LINK,
                     reason="Automated technical retries exhausted; issuing direct payment link for manual re-attempt.",
                     confidence=0.70,
-                    decision_basis={**base_basis, "rule_matched": "TransientTechnicalFallbackLinkRule"},
+                    decision_basis={
+                        **base_basis,
+                        "rule_matched": "TransientTechnicalFallbackLinkRule",
+                    },
                 )
 
         # Rule 5: Insufficient Funds
@@ -446,24 +480,30 @@ class DecisionEngine:
                 normalize_action_name(a)
                 for a in context.recovery_statistics.previously_successful_actions
             ]
-            has_hist_link = (
-                RecoveryAction.PAYMENT_LINK in hist_successful
-                or (
-                    evidence["has_evidence"]
-                    and evidence["best_action"] == RecoveryAction.PAYMENT_LINK
-                    and evidence["best_action_score"] > 0.4
-                )
+            has_hist_link = RecoveryAction.PAYMENT_LINK in hist_successful or (
+                evidence["has_evidence"]
+                and evidence["best_action"] == RecoveryAction.PAYMENT_LINK
+                and evidence["best_action_score"] > 0.4
             )
 
-            if has_hist_link and RecoveryAction.PAYMENT_LINK not in attempted_actions_normalized:
+            if (
+                has_hist_link
+                and RecoveryAction.PAYMENT_LINK not in attempted_actions_normalized
+            ):
                 conf = 0.80
-                if evidence["has_evidence"] and evidence["best_action"] == RecoveryAction.PAYMENT_LINK:
+                if (
+                    evidence["has_evidence"]
+                    and evidence["best_action"] == RecoveryAction.PAYMENT_LINK
+                ):
                     conf = min(0.90, conf + 0.05)
                 return RecoveryDecision(
                     recommended_action=RecoveryAction.PAYMENT_LINK,
                     reason="Insufficient funds detected; customer has historically recovered successfully via payment link.",
                     confidence=conf,
-                    decision_basis={**base_basis, "rule_matched": "InsufficientFundsHistoricalLinkRule"},
+                    decision_basis={
+                        **base_basis,
+                        "rule_matched": "InsufficientFundsHistoricalLinkRule",
+                    },
                 )
 
             if (
@@ -474,21 +514,30 @@ class DecisionEngine:
                     recommended_action=RecoveryAction.WAIT_AND_RETRY,
                     reason="Insufficient funds detected; wait-and-retry recommended to allow account replenishment.",
                     confidence=0.75,
-                    decision_basis={**base_basis, "rule_matched": "InsufficientFundsInitialWaitRule"},
+                    decision_basis={
+                        **base_basis,
+                        "rule_matched": "InsufficientFundsInitialWaitRule",
+                    },
                 )
             elif RecoveryAction.PAYMENT_LINK not in attempted_actions_normalized:
                 return RecoveryDecision(
                     recommended_action=RecoveryAction.PAYMENT_LINK,
                     reason="Insufficient funds persisted after wait; issuing interactive payment link to customer.",
                     confidence=0.70,
-                    decision_basis={**base_basis, "rule_matched": "InsufficientFundsEscalateLinkRule"},
+                    decision_basis={
+                        **base_basis,
+                        "rule_matched": "InsufficientFundsEscalateLinkRule",
+                    },
                 )
             else:
                 return RecoveryDecision(
                     recommended_action=RecoveryAction.CHANGE_PAYMENT_METHOD,
                     reason="Repeated insufficient funds failures; requesting customer change payment method.",
                     confidence=0.65,
-                    decision_basis={**base_basis, "rule_matched": "InsufficientFundsChangeMethodRule"},
+                    decision_basis={
+                        **base_basis,
+                        "rule_matched": "InsufficientFundsChangeMethodRule",
+                    },
                 )
 
         # Rule 6: Customer Interaction / Authentication Failure
@@ -496,38 +545,55 @@ class DecisionEngine:
             if RecoveryAction.PAYMENT_LINK not in attempted_actions_normalized:
                 base_conf = 0.80
                 reason = "Customer authentication error or cancellation detected; sending interactive payment link for user re-entry."
-                if evidence["has_evidence"] and evidence["best_action"] == RecoveryAction.PAYMENT_LINK:
+                if (
+                    evidence["has_evidence"]
+                    and evidence["best_action"] == RecoveryAction.PAYMENT_LINK
+                ):
                     base_conf = min(0.90, base_conf + 0.05)
                 return RecoveryDecision(
                     recommended_action=RecoveryAction.PAYMENT_LINK,
                     reason=reason,
                     confidence=base_conf,
-                    decision_basis={**base_basis, "rule_matched": "CustomerInteractionPaymentLinkRule"},
+                    decision_basis={
+                        **base_basis,
+                        "rule_matched": "CustomerInteractionPaymentLinkRule",
+                    },
                 )
             else:
                 return RecoveryDecision(
                     recommended_action=RecoveryAction.CHANGE_PAYMENT_METHOD,
                     reason="Authentication issue unresolved via payment link; recommending change of payment method.",
                     confidence=0.70,
-                    decision_basis={**base_basis, "rule_matched": "CustomerInteractionChangeMethodRule"},
+                    decision_basis={
+                        **base_basis,
+                        "rule_matched": "CustomerInteractionChangeMethodRule",
+                    },
                 )
 
         # Rule 7: Empirical Historical Evidence Selection (for cold/unclassified failure reasons)
         if evidence["has_evidence"] and evidence["best_action"] is not None:
             best_act = evidence["best_action"]
-            if best_act not in attempted_actions_normalized and best_act != RecoveryAction.NO_ACTION:
+            if (
+                best_act not in attempted_actions_normalized
+                and best_act != RecoveryAction.NO_ACTION
+            ):
                 score = evidence["best_action_score"]
                 conf = round(min(0.85, 0.65 + 0.15 * min(1.0, score)), 2)
                 return RecoveryDecision(
                     recommended_action=best_act,
                     reason=f"Selected '{best_act.value}' based on {evidence['valid_cases_count']} similar historical recovery cases.",
                     confidence=conf,
-                    decision_basis={**base_basis, "rule_matched": "HistoricalRAGSelectedRule"},
+                    decision_basis={
+                        **base_basis,
+                        "rule_matched": "HistoricalRAGSelectedRule",
+                    },
                 )
 
         # Rule 8: Historical Affinity from Recovery Statistics
         if context.recovery_statistics.recovery_rate > 0.0:
-            for hist_action_str in context.recovery_statistics.previously_successful_actions:
+            for (
+                hist_action_str
+            ) in context.recovery_statistics.previously_successful_actions:
                 norm_action = normalize_action_name(hist_action_str)
                 if (
                     norm_action
@@ -535,13 +601,20 @@ class DecisionEngine:
                     and norm_action != RecoveryAction.NO_ACTION
                 ):
                     confidence_score = round(
-                        min(0.85, 0.60 + 0.25 * context.recovery_statistics.recovery_rate), 2
+                        min(
+                            0.85,
+                            0.60 + 0.25 * context.recovery_statistics.recovery_rate,
+                        ),
+                        2,
                     )
                     return RecoveryDecision(
                         recommended_action=norm_action,
                         reason=f"Selected '{norm_action.value}' based on customer's historical recovery success track record.",
                         confidence=confidence_score,
-                        decision_basis={**base_basis, "rule_matched": "HistoricalAffinityRule"},
+                        decision_basis={
+                            **base_basis,
+                            "rule_matched": "HistoricalAffinityRule",
+                        },
                     )
 
         # Rule 9: Default Fallback for Cold-Start / Unknown Failure Reason
@@ -572,8 +645,8 @@ class DecisionEngine:
     def evaluate(
         self,
         context: CustomerRecoveryContext,
-        historical_cases: Optional[List[HistoricalCase]] = None,
-        policy_context: Optional[RecoveryPolicyContext] = None,
+        historical_cases: list[HistoricalCase] | None = None,
+        policy_context: RecoveryPolicyContext | None = None,
     ) -> RecoveryDecision:
         """
         Evaluate context, historical evidence, and policy constraints to produce a final RecoveryDecision.
@@ -613,14 +686,18 @@ class DecisionEngine:
         basis_dict["policy_overridden"] = was_overridden
 
         if was_overridden:
-            basis_dict["original_candidate_action"] = candidate_decision.recommended_action.value
+            basis_dict["original_candidate_action"] = (
+                candidate_decision.recommended_action.value
+            )
             basis_dict["violated_policy_ids"] = list(validation.violated_policy_ids)
             reason = (
                 f"Policy override: {validation.explanation} "
                 f"(Original recommendation '{candidate_decision.recommended_action.value}' was prohibited)."
             )
             confidence = (
-                0.95 if effective_action == RecoveryAction.NO_ACTION else min(candidate_decision.confidence, 0.85)
+                0.95
+                if effective_action == RecoveryAction.NO_ACTION
+                else min(candidate_decision.confidence, 0.85)
             )
         else:
             reason = candidate_decision.reason
@@ -637,9 +714,9 @@ class DecisionEngine:
 def evaluate_recovery_decision(
     context: CustomerRecoveryContext,
     max_attempts: int = 3,
-    retriever: Optional[HybridHistoricalRetriever] = None,
-    historical_cases: Optional[List[HistoricalCase]] = None,
-    policy_context: Optional[RecoveryPolicyContext] = None,
+    retriever: HybridHistoricalRetriever | None = None,
+    historical_cases: list[HistoricalCase] | None = None,
+    policy_context: RecoveryPolicyContext | None = None,
 ) -> RecoveryDecision:
     """
     Public entrypoint for the deterministic recovery decision engine with optional historical RAG and policy constraints.

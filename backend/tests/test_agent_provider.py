@@ -2,9 +2,7 @@
 Unit tests for Revora LLM Provider Abstraction and Mock LLM Provider.
 """
 
-from typing import Dict, List
 import pytest
-
 from app.agent.prompts import build_agent_messages
 from app.agent.provider import (
     LLMProvider,
@@ -34,7 +32,7 @@ def valid_recommendation() -> LLMRecoveryRecommendation:
 
 
 @pytest.fixture
-def valid_messages() -> List[Dict[str, str]]:
+def valid_messages() -> list[dict[str, str]]:
     """Create a standard valid 2-message chat sequence."""
     return [
         {"role": "system", "content": "You are Revora's recovery engine."},
@@ -61,7 +59,9 @@ def test_provider_protocol_shape(valid_recommendation):
 
 
 @pytest.mark.anyio
-async def test_mock_provider_returns_recommendation(valid_recommendation, valid_messages):
+async def test_mock_provider_returns_recommendation(
+    valid_recommendation, valid_messages
+):
     """Verify configured valid LLMRecoveryRecommendation is returned upon generation."""
     provider = MockLLMProvider(recommendation=valid_recommendation)
     result = await provider.generate(valid_messages)
@@ -69,7 +69,10 @@ async def test_mock_provider_returns_recommendation(valid_recommendation, valid_
     assert result == valid_recommendation
     assert result.recommended_action == RecoveryAction.PAYMENT_LINK
     assert result.confidence == 0.85
-    assert result.reasoning == "High probability of customer engagement via interactive payment link."
+    assert (
+        result.reasoning
+        == "High probability of customer engagement via interactive payment link."
+    )
 
 
 @pytest.mark.anyio
@@ -87,7 +90,9 @@ async def test_mock_provider_is_deterministic(valid_recommendation, valid_messag
 @pytest.mark.anyio
 async def test_mock_provider_records_messages(valid_recommendation, valid_messages):
     """Verify message recording in recorded_messages and last_messages."""
-    provider = MockLLMProvider(recommendation=valid_recommendation, record_messages=True)
+    provider = MockLLMProvider(
+        recommendation=valid_recommendation, record_messages=True
+    )
     assert provider.recorded_messages == []
     assert provider.last_messages is None
 
@@ -108,7 +113,9 @@ async def test_mock_provider_records_messages(valid_recommendation, valid_messag
 @pytest.mark.anyio
 async def test_mock_provider_disable_recording(valid_recommendation, valid_messages):
     """Verify record_messages=False leaves recorded_messages empty."""
-    provider = MockLLMProvider(recommendation=valid_recommendation, record_messages=False)
+    provider = MockLLMProvider(
+        recommendation=valid_recommendation, record_messages=False
+    )
     await provider.generate(valid_messages)
 
     assert provider.recorded_messages == []
@@ -189,7 +196,9 @@ async def test_provider_rejects_invalid_content(valid_recommendation):
 
 
 @pytest.mark.anyio
-async def test_mock_provider_returns_validated_contract(valid_recommendation, valid_messages):
+async def test_mock_provider_returns_validated_contract(
+    valid_recommendation, valid_messages
+):
     """Verify return object strictly conforms to LLMRecoveryRecommendation schema."""
     provider = MockLLMProvider(recommendation=valid_recommendation)
     result = await provider.generate(valid_messages)
@@ -201,7 +210,9 @@ async def test_mock_provider_returns_validated_contract(valid_recommendation, va
 
 
 @pytest.mark.anyio
-async def test_provider_does_not_return_agent_decision_result(valid_recommendation, valid_messages):
+async def test_provider_does_not_return_agent_decision_result(
+    valid_recommendation, valid_messages
+):
     """Verify provider returns candidate recommendation and does NOT return AgentDecisionResult."""
     provider = MockLLMProvider(recommendation=valid_recommendation)
     result = await provider.generate(valid_messages)
@@ -212,7 +223,10 @@ async def test_provider_does_not_return_agent_decision_result(valid_recommendati
 
 def test_mock_provider_rejects_invalid_recommendation_type():
     """Verify constructing MockLLMProvider with non-LLMRecoveryRecommendation raises TypeError."""
-    with pytest.raises(TypeError, match="Expected recommendation to be an instance of LLMRecoveryRecommendation"):
+    with pytest.raises(
+        TypeError,
+        match="Expected recommendation to be an instance of LLMRecoveryRecommendation",
+    ):
         MockLLMProvider(recommendation={"recommended_action": "payment_link"})  # type: ignore
 
 
@@ -238,7 +252,9 @@ async def test_mock_provider_failure_is_explicit(valid_recommendation, valid_mes
 
 
 @pytest.mark.anyio
-async def test_mock_provider_custom_exception_propagation(valid_recommendation, valid_messages):
+async def test_mock_provider_custom_exception_propagation(
+    valid_recommendation, valid_messages
+):
     """Verify custom failure exception is propagated directly."""
     custom_err = LLMResponseValidationError("Malformed response payload.")
     provider = MockLLMProvider(
@@ -257,7 +273,9 @@ async def test_mock_provider_custom_exception_propagation(valid_recommendation, 
 
 
 @pytest.mark.anyio
-async def test_mock_provider_integration_with_build_agent_messages(valid_recommendation):
+async def test_mock_provider_integration_with_build_agent_messages(
+    valid_recommendation,
+):
     """Verify end-to-end integration from AgentDecisionPromptContext -> build_agent_messages -> provider."""
     ctx = AgentDecisionPromptContext(
         current_payment={"amount": 800.0, "currency": "INR", "payment_method": "card"},
@@ -274,10 +292,14 @@ async def test_mock_provider_integration_with_build_agent_messages(valid_recomme
 
 
 @pytest.mark.anyio
-async def test_provider_does_not_mutate_input_messages(valid_recommendation, valid_messages):
+async def test_provider_does_not_mutate_input_messages(
+    valid_recommendation, valid_messages
+):
     """Verify input message structures are not mutated during generation or recording."""
     original_messages = [dict(m) for m in valid_messages]
-    provider = MockLLMProvider(recommendation=valid_recommendation, record_messages=True)
+    provider = MockLLMProvider(
+        recommendation=valid_recommendation, record_messages=True
+    )
 
     await provider.generate(valid_messages)
 
@@ -285,9 +307,13 @@ async def test_provider_does_not_mutate_input_messages(valid_recommendation, val
 
 
 @pytest.mark.anyio
-async def test_recorded_messages_mutation_isolation(valid_recommendation, valid_messages):
+async def test_recorded_messages_mutation_isolation(
+    valid_recommendation, valid_messages
+):
     """Regression test for Finding 1: mutating returned recorded_messages does not alter internal state."""
-    provider = MockLLMProvider(recommendation=valid_recommendation, record_messages=True)
+    provider = MockLLMProvider(
+        recommendation=valid_recommendation, record_messages=True
+    )
     await provider.generate(valid_messages)
 
     retrieved_recorded = provider.recorded_messages
@@ -307,7 +333,9 @@ async def test_recorded_messages_mutation_isolation(valid_recommendation, valid_
 @pytest.mark.anyio
 async def test_last_messages_mutation_isolation(valid_recommendation, valid_messages):
     """Regression test for Finding 1: mutating returned last_messages does not alter internal state."""
-    provider = MockLLMProvider(recommendation=valid_recommendation, record_messages=True)
+    provider = MockLLMProvider(
+        recommendation=valid_recommendation, record_messages=True
+    )
     await provider.generate(valid_messages)
 
     retrieved_last = provider.last_messages
@@ -324,16 +352,24 @@ async def test_last_messages_mutation_isolation(valid_recommendation, valid_mess
     assert len(fresh_last) == len(valid_messages)
 
 
-def test_mock_provider_rejects_non_llm_provider_error_failure_exception(valid_recommendation):
+def test_mock_provider_rejects_non_llm_provider_error_failure_exception(
+    valid_recommendation,
+):
     """Regression test for Finding 2: failure_exception must be an instance of LLMProviderError."""
-    with pytest.raises(TypeError, match="Expected failure_exception to be an instance of LLMProviderError"):
+    with pytest.raises(
+        TypeError,
+        match="Expected failure_exception to be an instance of LLMProviderError",
+    ):
         MockLLMProvider(
             recommendation=valid_recommendation,
             should_fail=True,
             failure_exception=RuntimeError("Standard runtime error"),  # type: ignore
         )
 
-    with pytest.raises(TypeError, match="Expected failure_exception to be an instance of LLMProviderError"):
+    with pytest.raises(
+        TypeError,
+        match="Expected failure_exception to be an instance of LLMProviderError",
+    ):
         MockLLMProvider(
             recommendation=valid_recommendation,
             should_fail=True,
@@ -342,7 +378,9 @@ def test_mock_provider_rejects_non_llm_provider_error_failure_exception(valid_re
 
 
 @pytest.mark.anyio
-async def test_mock_provider_accepts_valid_llm_provider_error_subclasses(valid_recommendation, valid_messages):
+async def test_mock_provider_accepts_valid_llm_provider_error_subclasses(
+    valid_recommendation, valid_messages
+):
     """Regression test for Finding 2: failure_exception accepts LLMProviderError and its subtypes."""
     base_err = LLMProviderError("Base provider failure")
     provider_base = MockLLMProvider(
@@ -359,6 +397,7 @@ async def test_mock_provider_accepts_valid_llm_provider_error_subclasses(valid_r
         should_fail=True,
         failure_exception=validation_err,
     )
-    with pytest.raises(LLMResponseValidationError, match="Response schema validation failure"):
+    with pytest.raises(
+        LLMResponseValidationError, match="Response schema validation failure"
+    ):
         await provider_val.generate(valid_messages)
-

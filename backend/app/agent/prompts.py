@@ -6,7 +6,6 @@ for the Adaptive Recovery Agent.
 """
 
 import json
-from typing import Any, Dict, List
 
 from app.agent.schemas import AgentDecisionPromptContext
 
@@ -34,7 +33,7 @@ You must respond with a valid JSON object matching the following structure:
 
 def build_agent_messages(
     prompt_context: AgentDecisionPromptContext,
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     """
     Format a sanitized AgentDecisionPromptContext into standard chat messages.
 
@@ -58,7 +57,9 @@ def build_agent_messages(
     user_payload_dict = {
         "current_payment": context_dict.get("current_payment", {}),
         "customer_recovery_profile": context_dict.get("customer_profile", {}),
-        "prior_attempts_on_this_payment": context_dict.get("recovery_attempt_history", []),
+        "prior_attempts_on_this_payment": context_dict.get(
+            "recovery_attempt_history", []
+        ),
         "retrieved_historical_evidence": context_dict.get("historical_cases", []),
         "policy_envelope": {
             "allowed_actions": context_dict.get("allowed_actions", []),

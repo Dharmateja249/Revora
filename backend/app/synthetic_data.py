@@ -7,12 +7,11 @@ memory for Revora's intelligence layer.
 """
 
 import csv
-import json
 import random
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 # Controlled domain sets
 FAILURE_REASONS = [
@@ -46,7 +45,7 @@ RECOVERY_ACTIONS = [
 # - insufficient_funds: PAYMENT_LINK / REMINDER outperform immediate RETRY.
 # - authentication_failed / payment_method_issue: Customer intervention (PAYMENT_LINK) outperforms RETRY.
 # - STOP: Always 0.0.
-BASE_RECOVERY_PROBABILITIES: Dict[str, Dict[str, float]] = {
+BASE_RECOVERY_PROBABILITIES: dict[str, dict[str, float]] = {
     "bank_timeout": {
         "RETRY": 0.72,
         "PAYMENT_LINK": 0.48,
@@ -123,7 +122,7 @@ class RecoveryRecord:
 
     # Recovery context
     action_taken: str
-    previous_action: Optional[str]
+    previous_action: str | None
     previous_attempt_count: int
 
     # Outcome
@@ -131,11 +130,11 @@ class RecoveryRecord:
     amount_recovered: float
     recovery_time_hours: float
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
-def _generate_customer_profile(rng: random.Random) -> Dict[str, Any]:
+def _generate_customer_profile(rng: random.Random) -> dict[str, Any]:
     """Generate a realistic customer payment history profile."""
     # Most customers have 2 to 30 transactions
     payment_count = max(1, int(rng.expovariate(1 / 12) + 1))
@@ -148,7 +147,7 @@ def _generate_customer_profile(rng: random.Random) -> Dict[str, Any]:
     else:
         success_rate = round(rng.uniform(0.25, 0.69), 3)
 
-    previous_failures = int(round(payment_count * (1.0 - success_rate)))
+    previous_failures = round(payment_count * (1.0 - success_rate))
 
     return {
         "customer_id": f"cust_{uuid.UUID(int=rng.getrandbits(128)).hex[:12]}",
@@ -161,7 +160,7 @@ def _generate_customer_profile(rng: random.Random) -> Dict[str, Any]:
 def _select_action(
     failure_reason: str,
     attempt_number: int,
-    previous_action: Optional[str],
+    previous_action: str | None,
     rng: random.Random,
 ) -> str:
     """Select a realistic recovery action based on failure type and attempt count."""
@@ -252,10 +251,13 @@ def _calculate_recovery_probability(
         # Retries are most effective within the first 6 hours
         if hours_since_failure > 12.0:
             prob *= 0.80
-    elif action_taken in ["PAYMENT_LINK", "REMINDER"]:
+    elif (
+        action_taken in ["PAYMENT_LINK", "REMINDER"]
+        and failure_reason == "insufficient_funds"
+        and hours_since_failure >= 4.0
+    ):
         # Insufficient funds recover slightly better after a few hours delay
-        if failure_reason == "insufficient_funds" and hours_since_failure >= 4.0:
-            prob *= 1.10
+        prob *= 1.10
 
     # 4. Very high amounts have slightly lower recovery resistance
     if payment_amount > 20000.0:
@@ -268,7 +270,7 @@ def _calculate_recovery_probability(
 def generate_synthetic_recovery_dataset(
     num_records: int = 5000,
     seed: int = 42,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Generate a deterministic synthetic historical dataset of recovery records.
 
@@ -285,7 +287,7 @@ def generate_synthetic_recovery_dataset(
     num_customers = max(200, num_records // 3)
     customer_pool = [_generate_customer_profile(rng) for _ in range(num_customers)]
 
-    records: List[Dict[str, Any]] = []
+    records: list[dict[str, Any]] = []
 
     # Failure reasons distribution weights
     failure_weights = [0.26, 0.22, 0.18, 0.14, 0.08, 0.08, 0.04]
@@ -314,11 +316,13 @@ def generate_synthetic_recovery_dataset(
 
         # Simulate recovery attempts lifecycle for this payment
         attempt_number = 1
-        previous_action: Optional[str] = None
+        previous_action: str | None = None
         current_hours = round(rng.uniform(0.1, 2.0), 2)
         payment_recovered = False
 
-        max_attempts_for_payment = rng.choices([1, 2, 3, 4], weights=[0.40, 0.35, 0.18, 0.07])[0]
+        max_attempts_for_payment = rng.choices(
+            [1, 2, 3, 4], weights=[0.40, 0.35, 0.18, 0.07]
+        )[0]
 
         while attempt_number <= max_attempts_for_payment and not payment_recovered:
             action_taken = _select_action(
@@ -385,7 +389,7 @@ def generate_synthetic_recovery_dataset(
     return records
 
 
-def save_dataset_to_csv(records: List[Dict[str, Any]], filepath: str | Path) -> None:
+def save_dataset_to_csv(records: list[dict[str, Any]], filepath: str | Path) -> None:
     """Save record list to a CSV file."""
     path = Path(filepath)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -400,39 +404,45 @@ def save_dataset_to_csv(records: List[Dict[str, Any]], filepath: str | Path) -> 
         writer.writerows(records)
 
 
-def load_dataset_from_csv(filepath: str | Path) -> List[Dict[str, Any]]:
+def load_dataset_from_csv(filepath: str | Path) -> list[dict[str, Any]]:
     """Load dataset records from a CSV file with typed conversion."""
     path = Path(filepath)
-    records: List[Dict[str, Any]] = []
+    records: list[dict[str, Any]] = []
 
     with open(path, mode="r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            records.append({
-                "record_id": row["record_id"],
-                "customer_id": row["customer_id"],
-                "payment_id": row["payment_id"],
-                "customer_payment_count": int(row["customer_payment_count"]),
-                "customer_success_rate": float(row["customer_success_rate"]),
-                "customer_previous_failures": int(row["customer_previous_failures"]),
-                "payment_amount": float(row["payment_amount"]),
-                "currency": row["currency"],
-                "payment_method": row["payment_method"],
-                "failure_reason": row["failure_reason"],
-                "attempt_number": int(row["attempt_number"]),
-                "hours_since_failure": float(row["hours_since_failure"]),
-                "action_taken": row["action_taken"],
-                "previous_action": row["previous_action"] if row["previous_action"] else None,
-                "previous_attempt_count": int(row["previous_attempt_count"]),
-                "recovered": row["recovered"].lower() in ("true", "1"),
-                "amount_recovered": float(row["amount_recovered"]),
-                "recovery_time_hours": float(row["recovery_time_hours"]),
-            })
+            records.append(
+                {
+                    "record_id": row["record_id"],
+                    "customer_id": row["customer_id"],
+                    "payment_id": row["payment_id"],
+                    "customer_payment_count": int(row["customer_payment_count"]),
+                    "customer_success_rate": float(row["customer_success_rate"]),
+                    "customer_previous_failures": int(
+                        row["customer_previous_failures"]
+                    ),
+                    "payment_amount": float(row["payment_amount"]),
+                    "currency": row["currency"],
+                    "payment_method": row["payment_method"],
+                    "failure_reason": row["failure_reason"],
+                    "attempt_number": int(row["attempt_number"]),
+                    "hours_since_failure": float(row["hours_since_failure"]),
+                    "action_taken": row["action_taken"],
+                    "previous_action": row["previous_action"]
+                    if row["previous_action"]
+                    else None,
+                    "previous_attempt_count": int(row["previous_attempt_count"]),
+                    "recovered": row["recovered"].lower() in ("true", "1"),
+                    "amount_recovered": float(row["amount_recovered"]),
+                    "recovery_time_hours": float(row["recovery_time_hours"]),
+                }
+            )
 
     return records
 
 
-def calculate_dataset_statistics(records: List[Dict[str, Any]]) -> Dict[str, Any]:
+def calculate_dataset_statistics(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Calculate comprehensive statistics and recovery rates across segments."""
     total_records = len(records)
     if total_records == 0:
@@ -447,42 +457,60 @@ def calculate_dataset_statistics(records: List[Dict[str, Any]]) -> Dict[str, Any
     overall_recovery_rate = round(recovered_records / total_records, 4)
 
     # Recovery rate by failure reason
-    by_reason: Dict[str, Dict[str, Any]] = {}
+    by_reason: dict[str, dict[str, Any]] = {}
     for reason in FAILURE_REASONS:
         subset = [r for r in records if r["failure_reason"] == reason]
         count = len(subset)
         recovered = sum(1 for r in subset if r["recovered"])
         rate = round(recovered / count, 4) if count > 0 else 0.0
-        by_reason[reason] = {"attempts": count, "recovered": recovered, "recovery_rate": rate}
+        by_reason[reason] = {
+            "attempts": count,
+            "recovered": recovered,
+            "recovery_rate": rate,
+        }
 
     # Recovery rate by action
-    by_action: Dict[str, Dict[str, Any]] = {}
+    by_action: dict[str, dict[str, Any]] = {}
     for action in RECOVERY_ACTIONS:
         subset = [r for r in records if r["action_taken"] == action]
         count = len(subset)
         recovered = sum(1 for r in subset if r["recovered"])
         rate = round(recovered / count, 4) if count > 0 else 0.0
-        by_action[action] = {"attempts": count, "recovered": recovered, "recovery_rate": rate}
+        by_action[action] = {
+            "attempts": count,
+            "recovered": recovered,
+            "recovery_rate": rate,
+        }
 
     # Recovery rate by attempt number
-    by_attempt: Dict[int, Dict[str, Any]] = {}
+    by_attempt: dict[int, dict[str, Any]] = {}
     attempts_seen = sorted({r["attempt_number"] for r in records})
     for att in attempts_seen:
         subset = [r for r in records if r["attempt_number"] == att]
         count = len(subset)
         recovered = sum(1 for r in subset if r["recovered"])
         rate = round(recovered / count, 4) if count > 0 else 0.0
-        by_attempt[att] = {"attempts": count, "recovered": recovered, "recovery_rate": rate}
+        by_attempt[att] = {
+            "attempts": count,
+            "recovered": recovered,
+            "recovery_rate": rate,
+        }
 
     # Recovery rate by (failure_reason, action) cross-tab
-    cross_tab: Dict[str, Dict[str, float]] = {}
+    cross_tab: dict[str, dict[str, float]] = {}
     for reason in FAILURE_REASONS:
         cross_tab[reason] = {}
         for action in RECOVERY_ACTIONS:
-            subset = [r for r in records if r["failure_reason"] == reason and r["action_taken"] == action]
+            subset = [
+                r
+                for r in records
+                if r["failure_reason"] == reason and r["action_taken"] == action
+            ]
             count = len(subset)
             recovered = sum(1 for r in subset if r["recovered"])
-            cross_tab[reason][action] = round(recovered / count, 4) if count > 0 else 0.0
+            cross_tab[reason][action] = (
+                round(recovered / count, 4) if count > 0 else 0.0
+            )
 
     return {
         "total_records": total_records,
@@ -500,11 +528,17 @@ def calculate_dataset_statistics(records: List[Dict[str, Any]]) -> Dict[str, Any
 
 def main():
     """Generate default dataset artifact and print statistics."""
-    print("Generating Revora synthetic historical recovery dataset (5,000 records, seed=42)...")
+    print(
+        "Generating Revora synthetic historical recovery dataset (5,000 records, seed=42)..."
+    )
     records = generate_synthetic_recovery_dataset(num_records=5000, seed=42)
 
     # Save to data directory
-    output_path = Path(__file__).resolve().parent.parent.parent / "data" / "historical_recovery_data.csv"
+    output_path = (
+        Path(__file__).resolve().parent.parent.parent
+        / "data"
+        / "historical_recovery_data.csv"
+    )
     save_dataset_to_csv(records, output_path)
     print(f"Dataset successfully saved to: {output_path}")
 
@@ -521,15 +555,21 @@ def main():
 
     print("\n--- Recovery Rate by Failure Reason ---")
     for reason, data in stats["recovery_rate_by_failure_reason"].items():
-        print(f"  {reason:<25} Attempts: {data['attempts']:<5} Recovered: {data['recovered']:<5} Rate: {data['recovery_rate']*100:.2f}%")
+        print(
+            f"  {reason:<25} Attempts: {data['attempts']:<5} Recovered: {data['recovered']:<5} Rate: {data['recovery_rate'] * 100:.2f}%"
+        )
 
     print("\n--- Recovery Rate by Action Taken ---")
     for action, data in stats["recovery_rate_by_action"].items():
-        print(f"  {action:<15} Attempts: {data['attempts']:<5} Recovered: {data['recovered']:<5} Rate: {data['recovery_rate']*100:.2f}%")
+        print(
+            f"  {action:<15} Attempts: {data['attempts']:<5} Recovered: {data['recovered']:<5} Rate: {data['recovery_rate'] * 100:.2f}%"
+        )
 
     print("\n--- Recovery Rate by Attempt Number ---")
     for att, data in stats["recovery_rate_by_attempt_number"].items():
-        print(f"  Attempt {att:<5} Attempts: {data['attempts']:<5} Recovered: {data['recovered']:<5} Rate: {data['recovery_rate']*100:.2f}%")
+        print(
+            f"  Attempt {att:<5} Attempts: {data['attempts']:<5} Recovered: {data['recovered']:<5} Rate: {data['recovery_rate'] * 100:.2f}%"
+        )
 
 
 if __name__ == "__main__":

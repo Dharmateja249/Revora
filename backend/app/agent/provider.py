@@ -5,7 +5,8 @@ Defines the decoupled, provider-agnostic protocol for executing chat messages
 and returning structured LLMRecoveryRecommendation contracts.
 """
 
-from typing import Any, Dict, List, Mapping, Optional, Protocol, Sequence, runtime_checkable
+from collections.abc import Mapping, Sequence
+from typing import Protocol, runtime_checkable
 
 from app.agent.schemas import LLMRecoveryRecommendation
 
@@ -15,13 +16,9 @@ SUPPORTED_MESSAGE_ROLES = frozenset({"system", "user", "assistant"})
 class LLMProviderError(Exception):
     """Base exception for all LLM provider execution or communication failures."""
 
-    pass
-
 
 class LLMResponseValidationError(LLMProviderError):
     """Raised when an LLM provider response is malformed or fails schema validation."""
-
-    pass
 
 
 def validate_chat_messages(messages: Sequence[Mapping[str, str]]) -> None:
@@ -35,7 +32,9 @@ def validate_chat_messages(messages: Sequence[Mapping[str, str]]) -> None:
         TypeError: If messages is not a sequence or if an individual message is not a mapping.
         ValueError: If messages is empty, or if role/content is missing, blank, or unsupported.
     """
-    if not isinstance(messages, Sequence) or isinstance(messages, (str, bytes, bytearray)):
+    if not isinstance(messages, Sequence) or isinstance(
+        messages, (str, bytes, bytearray)
+    ):
         raise TypeError(
             f"Expected Sequence of message mappings, got {type(messages).__name__}"
         )
@@ -74,7 +73,9 @@ def validate_chat_messages(messages: Sequence[Mapping[str, str]]) -> None:
             )
 
         if not content.strip():
-            raise ValueError(f"Message content at index {idx} cannot be empty or whitespace-only.")
+            raise ValueError(
+                f"Message content at index {idx} cannot be empty or whitespace-only."
+            )
 
 
 @runtime_checkable
@@ -111,7 +112,7 @@ class MockLLMProvider:
         self,
         recommendation: LLMRecoveryRecommendation,
         should_fail: bool = False,
-        failure_exception: Optional[LLMProviderError] = None,
+        failure_exception: LLMProviderError | None = None,
         record_messages: bool = True,
     ):
         """
@@ -129,7 +130,9 @@ class MockLLMProvider:
                 f"got {type(recommendation).__name__}"
             )
 
-        if failure_exception is not None and not isinstance(failure_exception, LLMProviderError):
+        if failure_exception is not None and not isinstance(
+            failure_exception, LLMProviderError
+        ):
             raise TypeError(
                 f"Expected failure_exception to be an instance of LLMProviderError, "
                 f"got {type(failure_exception).__name__}"
@@ -139,7 +142,7 @@ class MockLLMProvider:
         self._should_fail = bool(should_fail)
         self._failure_exception = failure_exception
         self._record_messages = bool(record_messages)
-        self._recorded_messages: List[List[Mapping[str, str]]] = []
+        self._recorded_messages: list[list[Mapping[str, str]]] = []
 
     @property
     def recommendation(self) -> LLMRecoveryRecommendation:
@@ -147,12 +150,12 @@ class MockLLMProvider:
         return self._recommendation
 
     @property
-    def recorded_messages(self) -> List[List[Dict[str, str]]]:
+    def recorded_messages(self) -> list[list[dict[str, str]]]:
         """Return an independent copy of the recorded message batches received by generate()."""
         return [[dict(m) for m in batch] for batch in self._recorded_messages]
 
     @property
-    def last_messages(self) -> Optional[List[Dict[str, str]]]:
+    def last_messages(self) -> list[dict[str, str]] | None:
         """Return an independent copy of the most recently received message batch, if any."""
         if not self._recorded_messages:
             return None
