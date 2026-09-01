@@ -29,6 +29,7 @@ out/
 .pytest_cache/
 .coverage
 htmlcov/
+backend/evaluation_results/
 
 # IDE & OS
 .vscode/
