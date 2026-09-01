@@ -10,6 +10,12 @@ from app.agent.prompts import (
     REVORA_AGENT_SYSTEM_PROMPT,
     build_agent_messages,
 )
+from app.agent.provider import (
+    LLMProvider,
+    LLMProviderError,
+    LLMResponseValidationError,
+    MockLLMProvider,
+)
 from app.agent.schemas import (
     AgentDecisionPromptContext,
     AgentDecisionResult,
@@ -23,4 +29,8 @@ __all__ = [
     "AgentContextBuilder",
     "build_agent_messages",
     "REVORA_AGENT_SYSTEM_PROMPT",
+    "LLMProvider",
+    "MockLLMProvider",
+    "LLMProviderError",
+    "LLMResponseValidationError",
 ]
