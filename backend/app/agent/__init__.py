@@ -6,6 +6,7 @@ decision orchestrators for adaptive failed payment recovery.
 """
 
 from app.agent.context_builder import AgentContextBuilder
+from app.agent.orchestrator import AgentOrchestrator
 from app.agent.prompts import (
     REVORA_AGENT_SYSTEM_PROMPT,
     build_agent_messages,
@@ -33,4 +34,5 @@ __all__ = [
     "MockLLMProvider",
     "LLMProviderError",
     "LLMResponseValidationError",
+    "AgentOrchestrator",
 ]
