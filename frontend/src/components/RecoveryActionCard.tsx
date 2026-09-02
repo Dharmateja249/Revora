@@ -244,7 +244,7 @@ export const RecoveryActionCard: React.FC<RecoveryActionCardProps> = ({
                 </span>
               ))
             ) : (
-              <span className="text-xs text-slate-500">Zero prior precedents required</span>
+              <span className="text-xs text-slate-500">No relevant historical precedents</span>
             )}
           </div>
         </div>

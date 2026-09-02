@@ -1015,3 +1015,123 @@ async def test_orchestrator_fallback_uses_applicable_rule_when_mandatory_fallbac
     assert result.is_fallback is True
     assert result.recommendation.recommended_action == RecoveryAction.WAIT_AND_RETRY
     assert result.recommendation.recommended_action not in policy.prohibited_actions
+
+
+@pytest.mark.anyio
+async def test_orchestrator_propagates_retrieved_case_ids_when_llm_omits_them(
+    sample_customer_context,
+    sample_policy_context,
+):
+    """Verify that when historical cases are retrieved but LLM returns empty referenced_case_ids, retrieved IDs are propagated."""
+    cases = [
+        HistoricalCase(
+            payment_id=uuid.uuid4(),
+            customer_id=sample_customer_context.customer.customer_id,
+            amount=1000.0,
+            currency="INR",
+            payment_method="card",
+            recovery_status="recovered",
+            was_recovered=True,
+            relevance_score=0.92,
+        ),
+        HistoricalCase(
+            payment_id=uuid.uuid4(),
+            customer_id=sample_customer_context.customer.customer_id,
+            amount=2000.0,
+            currency="INR",
+            payment_method="card",
+            recovery_status="recovered",
+            was_recovered=True,
+            relevance_score=0.85,
+        ),
+    ]
+    # LLM returns empty referenced_case_ids
+    rec = LLMRecoveryRecommendation(
+        recommended_action=RecoveryAction.PAYMENT_LINK,
+        confidence=0.90,
+        reasoning="Decision based on historical evidence.",
+        key_factors=["sample_factor"],
+        referenced_case_ids=(),
+    )
+    provider = MockLLMProvider(recommendation=rec)
+    orchestrator = AgentOrchestrator(provider=provider)
+
+    result = await orchestrator.decide(
+        context=sample_customer_context,
+        policy_context=sample_policy_context,
+        historical_cases=cases,
+    )
+
+    assert result.recommendation.referenced_case_ids == ("case_1", "case_2")
+
+
+@pytest.mark.anyio
+async def test_orchestrator_preserves_matching_retrieved_case_ids(
+    sample_customer_context,
+    sample_policy_context,
+):
+    """Verify that when LLM cites specific matching retrieved case IDs, those references are preserved."""
+    cases = [
+        HistoricalCase(
+            payment_id=uuid.uuid4(),
+            customer_id=sample_customer_context.customer.customer_id,
+            amount=1000.0,
+            currency="INR",
+            payment_method="card",
+            recovery_status="recovered",
+            was_recovered=True,
+            relevance_score=0.95,
+        ),
+        HistoricalCase(
+            payment_id=uuid.uuid4(),
+            customer_id=sample_customer_context.customer.customer_id,
+            amount=2000.0,
+            currency="INR",
+            payment_method="card",
+            recovery_status="recovered",
+            was_recovered=True,
+            relevance_score=0.80,
+        ),
+    ]
+    rec = LLMRecoveryRecommendation(
+        recommended_action=RecoveryAction.PAYMENT_LINK,
+        confidence=0.92,
+        reasoning="Specifically citing case_2 due to similarity.",
+        key_factors=["sample_factor"],
+        referenced_case_ids=("case_2",),
+    )
+    provider = MockLLMProvider(recommendation=rec)
+    orchestrator = AgentOrchestrator(provider=provider)
+
+    result = await orchestrator.decide(
+        context=sample_customer_context,
+        policy_context=sample_policy_context,
+        historical_cases=cases,
+    )
+
+    assert result.recommendation.referenced_case_ids == ("case_2",)
+
+
+@pytest.mark.anyio
+async def test_orchestrator_strips_hallucinated_case_ids_when_zero_cases_retrieved(
+    sample_customer_context,
+    sample_policy_context,
+):
+    """Verify that when 0 cases were retrieved by RAG, hallucinated case IDs are stripped."""
+    rec = LLMRecoveryRecommendation(
+        recommended_action=RecoveryAction.PAYMENT_LINK,
+        confidence=0.92,
+        reasoning="Invented precedent case_999.",
+        key_factors=["sample_factor"],
+        referenced_case_ids=("case_999",),
+    )
+    provider = MockLLMProvider(recommendation=rec)
+    orchestrator = AgentOrchestrator(provider=provider)
+
+    result = await orchestrator.decide(
+        context=sample_customer_context,
+        policy_context=sample_policy_context,
+        historical_cases=[],
+    )
+
+    assert result.recommendation.referenced_case_ids == ()

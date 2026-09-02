@@ -84,8 +84,7 @@ export const RecoveryCase: React.FC<RecoveryCaseProps> = ({
       updateStage("step_2", "completed", "Trust score parsed");
       updateStage("step_3", "processing", "Vector RAG matching...");
 
-      await new Promise((r) => setTimeout(r, 250));
-      updateStage("step_3", "completed", "Precedents found");
+      await new Promise((r) => setTimeout(r, 200));
       updateStage("step_4", "processing", "LLM synthesizing...");
 
       // Call REAL backend API with execute_action: false
@@ -94,6 +93,19 @@ export const RecoveryCase: React.FC<RecoveryCaseProps> = ({
         execute_action: false,
       });
 
+      // Stage 3: Derived dynamically from actual RAG retrieval results
+      const precedentCount = result.referenced_case_ids?.length || 0;
+      if (precedentCount > 0) {
+        updateStage(
+          "step_3",
+          "completed",
+          `${precedentCount} precedent${precedentCount > 1 ? "s" : ""} cited`
+        );
+      } else {
+        updateStage("step_3", "completed", "No relevant historical precedents");
+      }
+
+      // Stage 4: AI Recommendation
       updateStage("step_4", "completed", `${Math.round(result.confidence * 100)}% confidence`);
 
       // Stage 5: Policy Validation
@@ -110,6 +122,7 @@ export const RecoveryCase: React.FC<RecoveryCaseProps> = ({
     } catch (err: unknown) {
       const msg = err instanceof ApiError ? err.detail : "Failed to communicate with Revora decision API.";
       setErrorMessage(msg);
+      updateStage("step_3", "failed", "RAG check incomplete");
       updateStage("step_4", "failed", "Analysis failed");
     } finally {
       setIsAnalyzing(false);

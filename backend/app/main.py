@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.database import init_db
+from app.vector_seeder import seed_runtime_vector_index
 
 settings = get_settings()
 
@@ -13,6 +14,8 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     # Initialize database tables on application startup
     init_db()
+    # Seed runtime vector index with historical recovery precedents for demo tenant
+    seed_runtime_vector_index()
     yield
 
 
