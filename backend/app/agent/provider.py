@@ -6,9 +6,12 @@ and returning structured LLMRecoveryRecommendation contracts.
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from app.agent.schemas import LLMRecoveryRecommendation
+
+if TYPE_CHECKING:
+    from app.agent.openai_provider import OpenAILLMProvider, RealLLMProvider
 
 SUPPORTED_MESSAGE_ROLES = frozenset({"system", "user", "assistant"})
 
@@ -19,6 +22,22 @@ class LLMProviderError(Exception):
 
 class LLMResponseValidationError(LLMProviderError):
     """Raised when an LLM provider response is malformed or fails schema validation."""
+
+
+class LLMAuthenticationError(LLMProviderError):
+    """Raised when LLM provider authentication or authorization fails."""
+
+
+class LLMRateLimitError(LLMProviderError):
+    """Raised when LLM provider rate limits or quotas are exceeded."""
+
+
+class LLMTimeoutError(LLMProviderError):
+    """Raised when an LLM provider request times out."""
+
+
+class LLMConnectionError(LLMProviderError):
+    """Raised when a network or connection failure occurs communicating with LLM provider."""
 
 
 def validate_chat_messages(messages: Sequence[Mapping[str, str]]) -> None:
@@ -189,3 +208,27 @@ class MockLLMProvider:
             raise LLMProviderError("MockLLMProvider configured execution failure.")
 
         return self._recommendation
+
+
+def __getattr__(name: str) -> Any:
+    if name in ("OpenAILLMProvider", "RealLLMProvider"):
+        from app.agent.openai_provider import OpenAILLMProvider, RealLLMProvider
+
+        return OpenAILLMProvider if name == "OpenAILLMProvider" else RealLLMProvider
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+__all__ = [
+    "SUPPORTED_MESSAGE_ROLES",
+    "LLMAuthenticationError",
+    "LLMConnectionError",
+    "LLMProvider",
+    "LLMProviderError",
+    "LLMRateLimitError",
+    "LLMResponseValidationError",
+    "LLMTimeoutError",
+    "MockLLMProvider",
+    "OpenAILLMProvider",
+    "RealLLMProvider",
+    "validate_chat_messages",
+]

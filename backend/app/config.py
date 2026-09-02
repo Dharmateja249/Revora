@@ -12,6 +12,15 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite:///./revora.db"
     ENABLE_AGENT_DECISION_ENGINE: bool = False
 
+    # LLM Provider Configuration
+    LLM_PROVIDER: str = "mock"
+    OPENAI_API_KEY: str | None = None
+    OPENAI_MODEL: str | None = None
+    OPENAI_TIMEOUT_SECONDS: float | None = None
+    LLM_API_KEY: str | None = None
+    LLM_MODEL: str | None = None
+    LLM_TIMEOUT_SECONDS: float | None = None
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 
