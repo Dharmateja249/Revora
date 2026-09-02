@@ -85,6 +85,49 @@ adaptive-recovery agent/
    - Health check: [http://localhost:8000/health](http://localhost:8000/health)
    - Interactive API docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 
+7. Example Decision & Execution API Request:
+   ```bash
+   curl -X POST http://localhost:8000/api/recovery/decision \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer 00000000-0000-0000-0000-000000000001" \
+     -d '{
+       "amount": 2500.0,
+       "currency": "INR",
+       "payment_method": "upi",
+       "failure_reason": "bank_technical_timeout",
+       "payment_status": "failed",
+       "execute_action": true,
+       "max_attempts": 3
+     }'
+   ```
+
+   > **Note**: `execute_action` is opt-in (defaults to `false`). Set `"execute_action": true` to dispatch external recovery action execution.
+
+   Response:
+   ```json
+   {
+     "recommended_action": "payment_link",
+     "confidence": 0.85,
+     "reasoning": "Interactive payment link required for recovery.",
+     "key_factors": ["transient_network_error"],
+     "referenced_case_ids": [],
+     "agent_used": true,
+     "policy_overridden": false,
+     "is_fallback": false,
+     "fallback_reason": null,
+     "execution": {
+       "action": "payment_link",
+       "attempted": true,
+       "status": "simulated",
+       "success": true,
+       "reference_id": "plink_sim_3b9f12d8a4",
+       "resource_url": "https://rzp.io/i/sim_8a7d2c1e",
+       "message": "Razorpay Payment Link generated successfully: https://rzp.io/i/sim_8a7d2c1e",
+       "error": null
+     }
+   }
+   ```
+
 ---
 
 ### Running Backend Tests
