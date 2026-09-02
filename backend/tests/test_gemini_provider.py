@@ -295,6 +295,79 @@ async def test_gemini_provider_maps_malformed_json_response():
         await provider.generate([{"role": "user", "content": "Evaluate"}])
 
 
+@pytest.mark.anyio
+async def test_gemini_candidate_not_dict_raises_validation_error():
+    """Verify non-dict candidate raises LLMResponseValidationError without AttributeError."""
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"candidates": ["malformed_string_candidate"]}
+    mock_client.post.return_value = mock_response
+
+    provider = GeminiLLMProvider(api_key="test-key", client=mock_client)
+
+    with pytest.raises(
+        LLMResponseValidationError, match="Expected candidate choice to be a dict"
+    ):
+        await provider.generate([{"role": "user", "content": "Evaluate"}])
+
+
+@pytest.mark.anyio
+async def test_gemini_content_not_dict_raises_validation_error():
+    """Verify non-dict candidate content raises LLMResponseValidationError without AttributeError."""
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "candidates": [{"content": "not-a-dict", "finishReason": "STOP"}]
+    }
+    mock_client.post.return_value = mock_response
+
+    provider = GeminiLLMProvider(api_key="test-key", client=mock_client)
+
+    with pytest.raises(
+        LLMResponseValidationError, match="Expected candidate content to be a dict"
+    ):
+        await provider.generate([{"role": "user", "content": "Evaluate"}])
+
+
+@pytest.mark.anyio
+async def test_gemini_first_part_not_dict_raises_validation_error():
+    """Verify non-dict first part raises LLMResponseValidationError without AttributeError."""
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "candidates": [
+            {"content": {"parts": ["not-a-dict-part"]}, "finishReason": "STOP"}
+        ]
+    }
+    mock_client.post.return_value = mock_response
+
+    provider = GeminiLLMProvider(api_key="test-key", client=mock_client)
+
+    with pytest.raises(
+        LLMResponseValidationError, match="Expected first content part to be a dict"
+    ):
+        await provider.generate([{"role": "user", "content": "Evaluate"}])
+
+
+@pytest.mark.anyio
+async def test_gemini_malformed_error_payload_raises():
+    """Verify malformed error payload raises LLMProviderError / LLMResponseValidationError safely."""
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 400
+    mock_response.json.return_value = {"error": 12345}
+    mock_response.text = '{"error": 12345}'
+    mock_client.post.return_value = mock_response
+
+    provider = GeminiLLMProvider(api_key="test-key", client=mock_client)
+
+    with pytest.raises(LLMResponseValidationError, match="malformed 'error' field"):
+        await provider.generate([{"role": "user", "content": "Evaluate"}])
+
+
 # ============================================================================
 # 3. Credentials & Security Invariants
 # ============================================================================
@@ -304,12 +377,16 @@ def test_gemini_provider_missing_key_raises_value_error(monkeypatch):
     """Verify that omitting Gemini API key raises a clear ValueError without silent mock fallback."""
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("LLM_API_KEY", raising=False)
+    get_settings.cache_clear()
 
-    with pytest.raises(
-        ValueError,
-        match="Gemini API key must be provided via 'api_key' argument, or via 'GEMINI_API_KEY'",
-    ):
-        GeminiLLMProvider(api_key=None)
+    try:
+        with pytest.raises(
+            ValueError,
+            match="Gemini API key must be provided via 'api_key' argument, or via 'GEMINI_API_KEY'",
+        ):
+            GeminiLLMProvider(api_key=None)
+    finally:
+        get_settings.cache_clear()
 
 
 def test_gemini_provider_repr_masks_secret():

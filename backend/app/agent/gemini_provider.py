@@ -243,16 +243,34 @@ class GeminiLLMProvider:
         error_msg = f"HTTP {response.status_code}"
         try:
             err_json = response.json()
-            if isinstance(err_json, dict) and "error" in err_json:
+            if isinstance(err_json, Mapping) and "error" in err_json:
                 api_error = err_json["error"]
-                message = api_error.get("message")
-                status_str = api_error.get("status")
-                if message:
-                    error_msg = (
-                        f"{message} (status: {status_str or response.status_code})"
+                if isinstance(api_error, Mapping):
+                    message = api_error.get("message")
+                    status_str = api_error.get("status")
+                    if message:
+                        error_msg = (
+                            f"{message} (status: {status_str or response.status_code})"
+                        )
+                elif isinstance(api_error, str) and api_error.strip():
+                    error_msg = f"{api_error.strip()} (status: {response.status_code})"
+                else:
+                    raise LLMResponseValidationError(
+                        f"Gemini error payload contained malformed 'error' field: {type(api_error).__name__}"
                     )
+            elif not isinstance(err_json, Mapping):
+                raise LLMResponseValidationError(
+                    f"Gemini error response was not a JSON object: {type(err_json).__name__}"
+                )
+        except LLMResponseValidationError:
+            raise
         except (ValueError, KeyError, TypeError):
-            error_msg = response.text or error_msg
+            if response.text and len(response.text) < 500:
+                error_msg = response.text
+
+        # Sanitize error message to prevent leaking API keys
+        if hasattr(self, "_api_key") and self._api_key and self._api_key in error_msg:
+            error_msg = error_msg.replace(self._api_key, "[REDACTED]")
 
         # Map by status code
         if response.status_code in (401, 403):
@@ -279,39 +297,56 @@ class GeminiLLMProvider:
                 f"Gemini returned invalid non-JSON payload: {exc}"
             ) from exc
 
-        if not isinstance(data, dict):
+        if not isinstance(data, Mapping):
             raise LLMResponseValidationError(
                 f"Expected dict response from Gemini, got {type(data).__name__}"
             )
 
         candidates = data.get("candidates")
         if not candidates or not isinstance(candidates, list):
-            prompt_feedback = data.get("promptFeedback", {})
-            block_reason = prompt_feedback.get("blockReason")
-            if block_reason:
-                raise LLMResponseValidationError(
-                    f"Gemini generation blocked by safety filters: {block_reason}"
-                )
+            prompt_feedback = data.get("promptFeedback")
+            if isinstance(prompt_feedback, Mapping):
+                block_reason = prompt_feedback.get("blockReason")
+                if block_reason:
+                    raise LLMResponseValidationError(
+                        f"Gemini generation blocked by safety filters: {block_reason}"
+                    )
             raise LLMResponseValidationError(
                 "Gemini response contained no candidate choices."
             )
 
         candidate = candidates[0]
+        if not isinstance(candidate, Mapping):
+            raise LLMResponseValidationError(
+                f"Expected candidate choice to be a dict, got {type(candidate).__name__}"
+            )
+
         finish_reason = candidate.get("finishReason")
         if finish_reason in ("SAFETY", "RECITATION"):
             raise LLMResponseValidationError(
                 f"Gemini response terminated early due to {finish_reason} filter."
             )
 
-        content = candidate.get("content", {})
-        parts = content.get("parts", [])
-        if not parts:
+        content = candidate.get("content")
+        if not isinstance(content, Mapping):
+            raise LLMResponseValidationError(
+                f"Expected candidate content to be a dict, got {type(content).__name__}"
+            )
+
+        parts = content.get("parts")
+        if not isinstance(parts, list) or not parts:
             raise LLMResponseValidationError(
                 "Gemini candidate content contained no parts."
             )
 
-        raw_text = parts[0].get("text", "")
-        if not raw_text or not raw_text.strip():
+        first_part = parts[0]
+        if not isinstance(first_part, Mapping):
+            raise LLMResponseValidationError(
+                f"Expected first content part to be a dict, got {type(first_part).__name__}"
+            )
+
+        raw_text = first_part.get("text", "")
+        if not isinstance(raw_text, str) or not raw_text.strip():
             raise LLMResponseValidationError(
                 "Gemini candidate part contained empty text."
             )

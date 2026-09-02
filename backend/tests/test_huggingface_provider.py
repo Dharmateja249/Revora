@@ -296,9 +296,13 @@ def test_huggingface_provider_missing_token_fails_clearly(monkeypatch):
     """Verify that omitting HF_TOKEN raises ValueError clearly without silent fallback."""
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("LLM_API_KEY", raising=False)
+    get_settings.cache_clear()
 
-    with pytest.raises(ValueError, match="Hugging Face API token must be provided"):
-        HuggingFaceLLMProvider(token=None)
+    try:
+        with pytest.raises(ValueError, match="Hugging Face API token must be provided"):
+            HuggingFaceLLMProvider(token=None)
+    finally:
+        get_settings.cache_clear()
 
 
 def test_huggingface_provider_masks_token_in_repr():

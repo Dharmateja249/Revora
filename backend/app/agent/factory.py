@@ -80,6 +80,7 @@ def create_llm_provider(
     if isinstance(config, str):
         if provider_name is None:
             provider_name = config
+        resolved_settings = get_settings()
     elif isinstance(config, Settings):
         resolved_settings = config
         if provider_name is None:
@@ -87,33 +88,6 @@ def create_llm_provider(
     elif isinstance(config, Mapping):
         if provider_name is None:
             provider_name = config.get("LLM_PROVIDER") or config.get("llm_provider")
-        api_key = (
-            api_key
-            or config.get("HF_TOKEN")
-            or config.get("GEMINI_API_KEY")
-            or config.get("OPENAI_API_KEY")
-            or config.get("LLM_API_KEY")
-        )
-        model = (
-            model
-            or config.get("HF_MODEL")
-            or config.get("GEMINI_MODEL")
-            or config.get("OPENAI_MODEL")
-            or config.get("LLM_MODEL")
-        )
-        timeout_val = (
-            config.get("HF_TIMEOUT_SECONDS")
-            or config.get("GEMINI_TIMEOUT_SECONDS")
-            or config.get("OPENAI_TIMEOUT_SECONDS")
-            or config.get("LLM_TIMEOUT_SECONDS")
-        )
-        if timeout_seconds is None and timeout_val is not None:
-            try:
-                timeout_seconds = float(timeout_val)
-            except (ValueError, TypeError) as exc:
-                raise LLMProviderConfigurationError(
-                    f"Invalid timeout value in config: {timeout_val!r}"
-                ) from exc
     elif config is None:
         resolved_settings = get_settings()
         if provider_name is None:
@@ -140,102 +114,87 @@ def create_llm_provider(
             record_messages=record_messages,
         )
 
-    if clean_provider == "openai":
-        from app.agent.openai_provider import OpenAILLMProvider
+    if clean_provider == "gemini":
+        key_name = "GEMINI_API_KEY"
+        model_name = "GEMINI_MODEL"
+        timeout_name = "GEMINI_TIMEOUT_SECONDS"
+    elif clean_provider == "huggingface":
+        key_name = "HF_TOKEN"
+        model_name = "HF_MODEL"
+        timeout_name = "HF_TIMEOUT_SECONDS"
+    elif clean_provider == "openai":
+        key_name = "OPENAI_API_KEY"
+        model_name = "OPENAI_MODEL"
+        timeout_name = "OPENAI_TIMEOUT_SECONDS"
+    else:
+        raise LLMProviderConfigurationError(
+            f"Unsupported or unknown LLM provider: {clean_provider!r}. "
+            f"Supported providers are: {sorted(SUPPORTED_PROVIDERS)!r}."
+        )
 
-        effective_key = (
-            api_key
-            or (
-                getattr(resolved_settings, "OPENAI_API_KEY", None)
-                if resolved_settings
-                else None
-            )
-            or (
-                getattr(resolved_settings, "LLM_API_KEY", None)
-                if resolved_settings
-                else None
-            )
+    # Resolve provider-specific configuration strictly for the selected provider
+    config_key = None
+    config_model = None
+    config_timeout_raw = None
+    if isinstance(config, Mapping):
+        config_key = config.get(key_name) or config.get("LLM_API_KEY")
+        config_model = config.get(model_name) or config.get("LLM_MODEL")
+        config_timeout_raw = config.get(timeout_name) or config.get(
+            "LLM_TIMEOUT_SECONDS"
         )
-        effective_model = (
-            model
-            or (
-                getattr(resolved_settings, "OPENAI_MODEL", None)
-                if resolved_settings
-                else None
-            )
-            or (
-                getattr(resolved_settings, "LLM_MODEL", None)
-                if resolved_settings
-                else None
-            )
+
+    parsed_config_timeout = None
+    if config_timeout_raw is not None:
+        try:
+            parsed_config_timeout = float(config_timeout_raw)
+        except (ValueError, TypeError) as exc:
+            raise LLMProviderConfigurationError(
+                f"Invalid timeout value in config: {config_timeout_raw!r}"
+            ) from exc
+
+    effective_key = (
+        api_key
+        or config_key
+        or (getattr(resolved_settings, key_name, None) if resolved_settings else None)
+        or (
+            getattr(resolved_settings, "LLM_API_KEY", None)
+            if resolved_settings
+            else None
         )
-        effective_timeout = (
-            timeout_seconds
-            if timeout_seconds is not None
+    )
+
+    effective_model = (
+        model
+        or config_model
+        or (getattr(resolved_settings, model_name, None) if resolved_settings else None)
+        or (
+            getattr(resolved_settings, "LLM_MODEL", None) if resolved_settings else None
+        )
+    )
+
+    effective_timeout = (
+        timeout_seconds
+        if timeout_seconds is not None
+        else (
+            parsed_config_timeout
+            if parsed_config_timeout is not None
             else (
-                getattr(resolved_settings, "OPENAI_TIMEOUT_SECONDS", None)
-                if resolved_settings
-                else None
-            )
-            or (
-                getattr(resolved_settings, "LLM_TIMEOUT_SECONDS", None)
-                if resolved_settings
-                else None
+                (
+                    getattr(resolved_settings, timeout_name, None)
+                    if resolved_settings
+                    else None
+                )
+                or (
+                    getattr(resolved_settings, "LLM_TIMEOUT_SECONDS", None)
+                    if resolved_settings
+                    else None
+                )
             )
         )
-
-        return OpenAILLMProvider(
-            api_key=effective_key,
-            model=effective_model,
-            timeout_seconds=effective_timeout,
-            client=client,
-            organization=organization,
-            base_url=base_url,
-        )
+    )
 
     if clean_provider == "gemini":
         from app.agent.gemini_provider import GeminiLLMProvider
-
-        effective_key = (
-            api_key
-            or (
-                getattr(resolved_settings, "GEMINI_API_KEY", None)
-                if resolved_settings
-                else None
-            )
-            or (
-                getattr(resolved_settings, "LLM_API_KEY", None)
-                if resolved_settings
-                else None
-            )
-        )
-        effective_model = (
-            model
-            or (
-                getattr(resolved_settings, "GEMINI_MODEL", None)
-                if resolved_settings
-                else None
-            )
-            or (
-                getattr(resolved_settings, "LLM_MODEL", None)
-                if resolved_settings
-                else None
-            )
-        )
-        effective_timeout = (
-            timeout_seconds
-            if timeout_seconds is not None
-            else (
-                getattr(resolved_settings, "GEMINI_TIMEOUT_SECONDS", None)
-                if resolved_settings
-                else None
-            )
-            or (
-                getattr(resolved_settings, "LLM_TIMEOUT_SECONDS", None)
-                if resolved_settings
-                else None
-            )
-        )
 
         return GeminiLLMProvider(
             api_key=effective_key,
@@ -248,47 +207,6 @@ def create_llm_provider(
     if clean_provider == "huggingface":
         from app.agent.huggingface_provider import HuggingFaceLLMProvider
 
-        effective_key = (
-            api_key
-            or (
-                getattr(resolved_settings, "HF_TOKEN", None)
-                if resolved_settings
-                else None
-            )
-            or (
-                getattr(resolved_settings, "LLM_API_KEY", None)
-                if resolved_settings
-                else None
-            )
-        )
-        effective_model = (
-            model
-            or (
-                getattr(resolved_settings, "HF_MODEL", None)
-                if resolved_settings
-                else None
-            )
-            or (
-                getattr(resolved_settings, "LLM_MODEL", None)
-                if resolved_settings
-                else None
-            )
-        )
-        effective_timeout = (
-            timeout_seconds
-            if timeout_seconds is not None
-            else (
-                getattr(resolved_settings, "HF_TIMEOUT_SECONDS", None)
-                if resolved_settings
-                else None
-            )
-            or (
-                getattr(resolved_settings, "LLM_TIMEOUT_SECONDS", None)
-                if resolved_settings
-                else None
-            )
-        )
-
         return HuggingFaceLLMProvider(
             token=effective_key,
             model=effective_model,
@@ -297,7 +215,14 @@ def create_llm_provider(
             base_url=base_url,
         )
 
-    raise LLMProviderConfigurationError(
-        f"Unsupported or unknown LLM provider: {clean_provider!r}. "
-        f"Supported providers are: {sorted(SUPPORTED_PROVIDERS)!r}."
-    )
+    if clean_provider == "openai":
+        from app.agent.openai_provider import OpenAILLMProvider
+
+        return OpenAILLMProvider(
+            api_key=effective_key,
+            model=effective_model,
+            timeout_seconds=effective_timeout,
+            client=client,
+            organization=organization,
+            base_url=base_url,
+        )
