@@ -72,6 +72,13 @@ export interface HealthCheckResponse {
   version: string;
 }
 
+export interface AuthTokenResponse {
+  access_token: string;
+  token_type: string;
+  customer_id: string;
+  expires_in: number;
+}
+
 /**
  * Frontend Demo Case Schema for representative scenarios.
  */
