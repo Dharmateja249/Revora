@@ -28,6 +28,16 @@ from app.evaluation.decision_evaluator import (
 from app.evaluation.schemas import DecisionBenchmarkReport
 from tests.fixtures.retrieval_golden_dataset import get_golden_evaluation_cases
 
+
+@pytest.fixture(autouse=True)
+def _reset_settings_cache():
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 # =============================================================================
 # Pipeline Resolution Tests
 # =============================================================================
@@ -260,10 +270,8 @@ def test_run_decision_cli_invalid_pipeline_returns_exit_code_1(capsys):
 def test_resolve_decision_pipeline_openai_provider_with_key(monkeypatch):
     """Verify resolve_decision_pipeline constructs OpenAILLMProvider when requested with key."""
     from app.agent.openai_provider import OpenAILLMProvider
-    from app.config import get_settings
 
-    settings = get_settings()
-    monkeypatch.setattr(settings, "OPENAI_API_KEY", "sk-test-mock-key-12345")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock-key-12345")
     pipe = resolve_decision_pipeline("agent_rag", llm_provider="openai")
 
     assert isinstance(pipe, AgentRAGPipeline)
@@ -274,15 +282,19 @@ def test_resolve_decision_pipeline_openai_provider_with_key(monkeypatch):
 def test_resolve_decision_pipeline_openai_agent_rag_name_with_key(monkeypatch):
     """Verify resolve_decision_pipeline supports openai_agent_rag name."""
     from app.agent.openai_provider import OpenAILLMProvider
-    from app.config import get_settings
 
-    settings = get_settings()
-    monkeypatch.setattr(settings, "OPENAI_API_KEY", "sk-test-mock-key-12345")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock-key-12345")
     pipe = resolve_decision_pipeline("openai_agent_rag")
 
     assert isinstance(pipe, AgentRAGPipeline)
     assert pipe.name == "openai_agent_rag"
     assert isinstance(pipe._orchestrator.provider, OpenAILLMProvider)
+
+
+def test_resolve_decision_pipeline_unsupported_llm_provider_raises_value_error():
+    """Verify resolve_decision_pipeline raises ValueError for unsupported llm_provider."""
+    with pytest.raises(ValueError, match="Unsupported LLM provider: 'opneai'"):
+        resolve_decision_pipeline("agent_rag", llm_provider="opneai")
 
 
 def test_resolve_decision_pipeline_openai_provider_missing_key_fails(monkeypatch):

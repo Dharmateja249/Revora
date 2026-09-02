@@ -65,6 +65,10 @@ def resolve_decision_pipeline(
             if norm_name == "openai_agent_rag"
             else llm_provider.strip().lower()
         )
+        if effective_provider not in {"mock", "openai"}:
+            raise ValueError(
+                f"Unsupported LLM provider: '{effective_provider}'. Supported providers are: 'mock', 'openai'."
+            )
         if agent_orchestrator is None:
             if not allow_default_evaluation_orchestrator:
                 raise ValueError(
