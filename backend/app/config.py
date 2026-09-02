@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     LLM_MODEL: str | None = None
     LLM_TIMEOUT_SECONDS: float | None = None
 
+    # Razorpay Gateway Configuration
+    RAZORPAY_KEY_ID: str | None = None
+    RAZORPAY_KEY_SECRET: str | None = None
+    RAZORPAY_BASE_URL: str = "https://api.razorpay.com/v1"
+    RAZORPAY_DRY_RUN: bool = True
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 

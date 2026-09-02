@@ -33,9 +33,13 @@ app.add_middleware(
 )
 
 
+from app.routers.decision import router as decision_router
 from app.routers.recovery import router as recovery_router
 
 # Register routers
+app.include_router(
+    decision_router,
+)
 app.include_router(
     recovery_router,
     prefix="/v1/recovery",
