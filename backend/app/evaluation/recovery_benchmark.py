@@ -184,8 +184,8 @@ def run_recovery_cli(
         "--llm-provider",
         type=str,
         default="mock",
-        choices=["mock", "openai"],
-        help="LLM provider for agent pipelines ('mock' for offline evaluation, 'openai' for live OpenAI). Defaults to 'mock'.",
+        choices=["mock", "openai", "gemini", "huggingface"],
+        help="LLM provider for agent pipelines ('mock', 'openai', 'gemini', or 'huggingface'). Defaults to 'mock'.",
     )
     parser.add_argument(
         "--baseline",

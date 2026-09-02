@@ -33,13 +33,13 @@ app.add_middleware(
 )
 
 
+from app.routers.decision import auth_router
 from app.routers.decision import router as decision_router
 from app.routers.recovery import router as recovery_router
 
 # Register routers
-app.include_router(
-    decision_router,
-)
+app.include_router(auth_router)
+app.include_router(decision_router)
 app.include_router(
     recovery_router,
     prefix="/v1/recovery",
@@ -49,9 +49,11 @@ app.include_router(
 
 @app.get("/health", tags=["Health"])
 def health_check():
-    """Simple health check endpoint returning service status."""
+    """Simple health check endpoint returning service status and runtime gateway mode."""
+    gateway_mode = "dry_run" if settings.RAZORPAY_DRY_RUN else "live"
     return {
         "status": "healthy",
         "app": settings.APP_NAME,
         "version": settings.APP_VERSION,
+        "gateway_mode": gateway_mode,
     }

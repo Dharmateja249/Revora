@@ -65,19 +65,19 @@ def resolve_decision_pipeline(
             if norm_name == "openai_agent_rag"
             else llm_provider.strip().lower()
         )
-        if effective_provider not in {"mock", "openai"}:
+        if effective_provider not in {"mock", "openai", "gemini", "huggingface"}:
             raise ValueError(
-                f"Unsupported LLM provider: '{effective_provider}'. Supported providers are: 'mock', 'openai'."
+                f"Unsupported LLM provider: '{effective_provider}'. Supported providers are: 'mock', 'openai', 'gemini', 'huggingface'."
             )
         if agent_orchestrator is None:
             if not allow_default_evaluation_orchestrator:
                 raise ValueError(
                     "AgentRAGPipeline requires an active AgentOrchestrator instance."
                 )
-            if effective_provider == "openai":
+            if effective_provider in {"openai", "gemini", "huggingface"}:
                 from app.agent.factory import create_llm_provider
 
-                provider = create_llm_provider(provider="openai")
+                provider = create_llm_provider(provider=effective_provider)
                 agent_orchestrator = AgentOrchestrator(provider=provider)
             else:
                 from app.evaluation.agent_evaluation_provider import (
@@ -257,8 +257,8 @@ def run_decision_cli(
         "--llm-provider",
         type=str,
         default="mock",
-        choices=["mock", "openai"],
-        help="LLM provider for agent pipelines ('mock' for offline evaluation, 'openai' for live OpenAI). Defaults to 'mock'.",
+        choices=["mock", "openai", "gemini", "huggingface"],
+        help="LLM provider for agent pipelines ('mock', 'openai', 'gemini', or 'huggingface'). Defaults to 'mock'.",
     )
     parser.add_argument(
         "--output-dir",

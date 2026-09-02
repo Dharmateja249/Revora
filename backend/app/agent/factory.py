@@ -29,7 +29,7 @@ DEFAULT_MOCK_RECOMMENDATION = LLMRecoveryRecommendation(
     referenced_case_ids=(),
 )
 
-SUPPORTED_PROVIDERS = frozenset({"mock", "openai"})
+SUPPORTED_PROVIDERS = frozenset({"mock", "openai", "gemini", "huggingface"})
 
 
 def create_llm_provider(
@@ -53,17 +53,17 @@ def create_llm_provider(
 
     Args:
         config: Optional application Settings, a mapping of configuration options,
-            a provider name string (e.g. "mock" or "openai"), or None to use global settings.
-        provider: Optional explicit provider name override ("mock" or "openai").
+            a provider name string (e.g. "mock", "openai", "gemini", or "huggingface"), or None to use global settings.
+        provider: Optional explicit provider name override ("mock", "openai", "gemini", or "huggingface").
         recommendation: Predefined recommendation for MockLLMProvider.
         should_fail: If True, MockLLMProvider raises on generate.
         failure_exception: Custom LLMProviderError for MockLLMProvider.
         record_messages: Whether MockLLMProvider records received messages.
-        api_key: Explicit OpenAI API key override for OpenAILLMProvider.
-        model: Explicit model name override for OpenAILLMProvider.
+        api_key: Explicit API key override for real LLM providers.
+        model: Explicit model name override for real LLM providers.
         timeout_seconds: Explicit request timeout in seconds.
-        client: Pre-configured AsyncOpenAI client instance (useful for testing/mocking).
-        organization: Optional OpenAI organization ID.
+        client: Pre-configured client instance (useful for testing/mocking).
+        organization: Optional organization ID.
         base_url: Optional alternative API endpoint URL.
         **kwargs: Additional provider-specific parameters.
 
@@ -87,10 +87,25 @@ def create_llm_provider(
     elif isinstance(config, Mapping):
         if provider_name is None:
             provider_name = config.get("LLM_PROVIDER") or config.get("llm_provider")
-        api_key = api_key or config.get("OPENAI_API_KEY") or config.get("LLM_API_KEY")
-        model = model or config.get("OPENAI_MODEL") or config.get("LLM_MODEL")
-        timeout_val = config.get("OPENAI_TIMEOUT_SECONDS") or config.get(
-            "LLM_TIMEOUT_SECONDS"
+        api_key = (
+            api_key
+            or config.get("HF_TOKEN")
+            or config.get("GEMINI_API_KEY")
+            or config.get("OPENAI_API_KEY")
+            or config.get("LLM_API_KEY")
+        )
+        model = (
+            model
+            or config.get("HF_MODEL")
+            or config.get("GEMINI_MODEL")
+            or config.get("OPENAI_MODEL")
+            or config.get("LLM_MODEL")
+        )
+        timeout_val = (
+            config.get("HF_TIMEOUT_SECONDS")
+            or config.get("GEMINI_TIMEOUT_SECONDS")
+            or config.get("OPENAI_TIMEOUT_SECONDS")
+            or config.get("LLM_TIMEOUT_SECONDS")
         )
         if timeout_seconds is None and timeout_val is not None:
             try:
@@ -175,6 +190,110 @@ def create_llm_provider(
             timeout_seconds=effective_timeout,
             client=client,
             organization=organization,
+            base_url=base_url,
+        )
+
+    if clean_provider == "gemini":
+        from app.agent.gemini_provider import GeminiLLMProvider
+
+        effective_key = (
+            api_key
+            or (
+                getattr(resolved_settings, "GEMINI_API_KEY", None)
+                if resolved_settings
+                else None
+            )
+            or (
+                getattr(resolved_settings, "LLM_API_KEY", None)
+                if resolved_settings
+                else None
+            )
+        )
+        effective_model = (
+            model
+            or (
+                getattr(resolved_settings, "GEMINI_MODEL", None)
+                if resolved_settings
+                else None
+            )
+            or (
+                getattr(resolved_settings, "LLM_MODEL", None)
+                if resolved_settings
+                else None
+            )
+        )
+        effective_timeout = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else (
+                getattr(resolved_settings, "GEMINI_TIMEOUT_SECONDS", None)
+                if resolved_settings
+                else None
+            )
+            or (
+                getattr(resolved_settings, "LLM_TIMEOUT_SECONDS", None)
+                if resolved_settings
+                else None
+            )
+        )
+
+        return GeminiLLMProvider(
+            api_key=effective_key,
+            model=effective_model,
+            timeout_seconds=effective_timeout,
+            client=client,
+            base_url=base_url,
+        )
+
+    if clean_provider == "huggingface":
+        from app.agent.huggingface_provider import HuggingFaceLLMProvider
+
+        effective_key = (
+            api_key
+            or (
+                getattr(resolved_settings, "HF_TOKEN", None)
+                if resolved_settings
+                else None
+            )
+            or (
+                getattr(resolved_settings, "LLM_API_KEY", None)
+                if resolved_settings
+                else None
+            )
+        )
+        effective_model = (
+            model
+            or (
+                getattr(resolved_settings, "HF_MODEL", None)
+                if resolved_settings
+                else None
+            )
+            or (
+                getattr(resolved_settings, "LLM_MODEL", None)
+                if resolved_settings
+                else None
+            )
+        )
+        effective_timeout = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else (
+                getattr(resolved_settings, "HF_TIMEOUT_SECONDS", None)
+                if resolved_settings
+                else None
+            )
+            or (
+                getattr(resolved_settings, "LLM_TIMEOUT_SECONDS", None)
+                if resolved_settings
+                else None
+            )
+        )
+
+        return HuggingFaceLLMProvider(
+            token=effective_key,
+            model=effective_model,
+            timeout_seconds=effective_timeout,
+            client=client,
             base_url=base_url,
         )
 

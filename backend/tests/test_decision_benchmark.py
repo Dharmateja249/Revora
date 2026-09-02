@@ -320,6 +320,31 @@ def test_resolve_decision_pipeline_mock_default():
     assert isinstance(pipe._orchestrator.provider, EvaluationAgentLLMProvider)
 
 
+def test_resolve_decision_pipeline_huggingface_provider_with_token(monkeypatch):
+    """Verify resolve_decision_pipeline constructs HuggingFaceLLMProvider when requested with token."""
+    from app.agent.huggingface_provider import HuggingFaceLLMProvider
+
+    monkeypatch.setenv("HF_TOKEN", "hf_test_mock_token_12345")
+    pipe = resolve_decision_pipeline("agent_rag", llm_provider="huggingface")
+
+    assert isinstance(pipe, AgentRAGPipeline)
+    assert pipe.name == "agent_rag"
+    assert isinstance(pipe._orchestrator.provider, HuggingFaceLLMProvider)
+
+
+def test_resolve_decision_pipeline_huggingface_provider_missing_token_fails(monkeypatch):
+    """Verify resolve_decision_pipeline raises ValueError if HF_TOKEN is missing."""
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "HF_TOKEN", None)
+
+    with pytest.raises(ValueError, match="Hugging Face API token must be provided"):
+        resolve_decision_pipeline("agent_rag", llm_provider="huggingface")
+
+
 def test_run_decision_cli_with_llm_provider_mock(capsys):
     """Verify running decision CLI with --llm-provider mock succeeds offline."""
     cases = get_golden_evaluation_cases()[:2]
