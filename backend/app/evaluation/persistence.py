@@ -49,8 +49,15 @@ def _atomic_write_json(file_path: Path, data: dict[str, Any]) -> None:
         # Atomic replace
         os.replace(temp_file.name, file_path)
     except Exception:
+        try:
+            temp_file.close()
+        except Exception:
+            pass
         if os.path.exists(temp_file.name):
-            os.remove(temp_file.name)
+            try:
+                os.remove(temp_file.name)
+            except Exception:
+                pass
         raise
 
 
