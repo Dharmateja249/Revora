@@ -369,10 +369,10 @@ def run_decision_cli(
         has_regression = False
         if parsed.compare_baseline:
             from app.evaluation.decision_persistence import (
-                compare_decision_with_baseline,
                 load_decision_report,
                 load_latest_decision_report,
             )
+            from app.evaluation.decision_regression import compare_decision_runs
 
             for rep in reports.values():
                 b_rep = pre_resolved_baselines.get(rep.pipeline_name)
@@ -393,14 +393,9 @@ def run_decision_cli(
                         f"No baseline report found on disk for pipeline '{rep.pipeline_name}'."
                     )
 
-                comp_res = compare_decision_with_baseline(
+                comp_res = compare_decision_runs(
                     current_report=rep,
-                    baseline_id_or_path=(
-                        None
-                        if parsed.compare_baseline == "latest"
-                        else parsed.compare_baseline
-                    ),
-                    directory=parsed.output_dir,
+                    baseline_report=b_rep,
                 )
                 if not parsed.quiet:
                     print(

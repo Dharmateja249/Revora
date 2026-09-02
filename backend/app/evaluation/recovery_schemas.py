@@ -5,15 +5,18 @@ Defines the domain contracts for synthetic recovery scenarios, simulated interve
 outcomes, and aggregate recovery benchmark financial reports.
 """
 
+import math
+import types
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 from app.context import CustomerRecoveryContext, utc_now
 from app.decision_engine import RecoveryAction
+from app.evaluation.schemas import _freeze_nested, _unfreeze_for_serialization
 
 DEFAULT_ACTION_COSTS: dict[RecoveryAction, float] = {
     RecoveryAction.RETRY_PAYMENT: 2.50,
@@ -55,11 +58,11 @@ class RecoveryScenario(BaseModel):
     @classmethod
     def validate_cost_per_action(cls, v: Mapping[str, float]) -> Mapping[str, float]:
         for action, cost in v.items():
-            if cost < 0.0:
+            if not math.isfinite(cost) or cost < 0.0:
                 raise ValueError(
-                    f"Action cost for '{action}' cannot be negative, got {cost}"
+                    f"Action cost for '{action}' cannot be negative and must be a finite non-negative number, got {cost}"
                 )
-        return v
+        return _freeze_nested(v) if v is not None else types.MappingProxyType({})
 
     @field_validator("success_action_rates")
     @classmethod
@@ -67,11 +70,17 @@ class RecoveryScenario(BaseModel):
         cls, v: Mapping[str, float]
     ) -> Mapping[str, float]:
         for action, rate in v.items():
-            if rate < 0.0 or rate > 1.0:
+            if not math.isfinite(rate) or not (0.0 <= rate <= 1.0):
                 raise ValueError(
-                    f"Success rate for '{action}' must be in range [0.0, 1.0], got {rate}"
+                    f"Success rate for '{action}' must be in range [0.0, 1.0] and finite, got {rate}"
                 )
-        return v
+        return _freeze_nested(v) if v is not None else types.MappingProxyType({})
+
+    @field_serializer("cost_per_action", "success_action_rates")
+    def _serialize_scenario_mappings(
+        self, v: Mapping[str, Any], _info: Any
+    ) -> dict[str, Any]:
+        return _unfreeze_for_serialization(v)
 
 
 class SimulatedRecoveryOutcome(BaseModel):
@@ -130,3 +139,14 @@ class RecoveryBenchmarkReport(BaseModel):
     evaluation_version: str = "1.0"
     report_id: str = Field(default_factory=lambda: f"recovery_{uuid4().hex[:12]}")
     metadata: Mapping[str, Any] = Field(default_factory=dict)
+
+    @field_validator("category_breakdown", "metadata", mode="after")
+    @classmethod
+    def _freeze_report_mappings(cls, v: Any) -> Mapping[str, Any]:
+        return _freeze_nested(v) if v is not None else types.MappingProxyType({})
+
+    @field_serializer("category_breakdown", "metadata")
+    def _serialize_report_mappings(
+        self, v: Mapping[str, Any], _info: Any
+    ) -> dict[str, Any]:
+        return _unfreeze_for_serialization(v)

@@ -813,3 +813,214 @@ def test_issue9_success_action_rates_validation():
             expected_recoverable_amount=1000.0,
             success_action_rates={"retry_payment": 1.05},
         )
+
+
+# ==============================================================================
+# ADDITIONAL CODERABBIT FINDINGS
+# ==============================================================================
+
+
+def test_additional_finding1_pre_resolved_baseline_reused(tmp_path: Path):
+    """
+    Ensure decision benchmark comparison flow reuses the pre-resolved baseline
+    without reloading from disk.
+    """
+    case = _dummy_case()
+
+    # 1. Save original baseline A
+    base_a = _dummy_decision_report(
+        "deterministic_baseline", exact_match=0.90, report_id="rep_base_a"
+    )
+    save_decision_report(base_a, directory=tmp_path)
+
+    # 2. Run CLI with mock compare that verifies baseline report used is base_a
+    called_baseline_reports: list[DecisionBenchmarkReport] = []
+
+    from app.evaluation import decision_regression
+
+    original_compare = decision_regression.compare_decision_runs
+
+    def tracking_compare(current_report, baseline_report, thresholds=None):
+        called_baseline_reports.append(baseline_report)
+        return original_compare(current_report, baseline_report, thresholds)
+
+    decision_regression.compare_decision_runs = tracking_compare
+    try:
+        ret = run_decision_cli(
+            args=[
+                "-p",
+                "deterministic_baseline",
+                "--compare-baseline",
+                "latest",
+                "--output-dir",
+                str(tmp_path),
+                "--no-save",
+                "-q",
+            ],
+            evaluation_cases=[case],
+        )
+        assert ret == 0
+        assert len(called_baseline_reports) == 1
+        assert called_baseline_reports[0].report_id == "rep_base_a"
+    finally:
+        decision_regression.compare_decision_runs = original_compare
+
+
+def test_additional_finding2_recovery_persistence_path_traversal(tmp_path: Path):
+    """
+    Ensure save_recovery_report enforces directory boundaries and rejects
+    traversal attempts or nested path components in report_id.
+    """
+    report = _dummy_recovery_report("deterministic_baseline")
+
+    # 1. Normal report ID succeeds
+    p1 = save_recovery_report(report, directory=tmp_path, report_id="normal_report")
+    assert p1.exists()
+    assert p1.name == "normal_report.json"
+
+    # 2. Valid .json report ID succeeds
+    p2 = save_recovery_report(
+        report, directory=tmp_path, report_id="valid_with_ext.json"
+    )
+    assert p2.exists()
+    assert p2.name == "valid_with_ext.json"
+
+    # 3. Overwrite behavior for valid report ID works
+    p3 = save_recovery_report(
+        report, directory=tmp_path, report_id="normal_report", overwrite=True
+    )
+    assert p3 == p1
+
+    # 4. Traversal attempt with ../ raises ValueError
+    with pytest.raises(
+        ValueError, match="without path components or directory traversal"
+    ):
+        save_recovery_report(report, directory=tmp_path, report_id="../escape_report")
+
+    # 5. Traversal attempt with absolute path raises ValueError
+    abs_bad_path = (
+        "/tmp/abs_escape" if not Path("C:/").exists() else "C:/Windows/abs_escape"
+    )
+    with pytest.raises(
+        ValueError, match="without path components or directory traversal"
+    ):
+        save_recovery_report(report, directory=tmp_path, report_id=abs_bad_path)
+
+    # 6. Nested subdirectory raises ValueError
+    with pytest.raises(
+        ValueError, match="without path components or directory traversal"
+    ):
+        save_recovery_report(
+            report, directory=tmp_path, report_id="nested/subdir_report"
+        )
+
+
+def test_additional_finding3_recovery_schemas_nan_and_inf():
+    """
+    Reject NaN and infinity for cost_per_action and success_action_rates in RecoveryScenario.
+    """
+    base_kwargs = {
+        "scenario_id": "scen_nan_test",
+        "context": _dummy_context(),
+        "payment_amount": 1000.0,
+        "failure_category": "soft_decline",
+        "expected_recoverable_amount": 1000.0,
+    }
+
+    # 1. cost_per_action: NaN, +inf, -inf
+    for bad_cost in [float("nan"), float("inf"), float("-inf"), -5.0]:
+        with pytest.raises(ValidationError, match="cannot be negative"):
+            RecoveryScenario(
+                **base_kwargs,
+                cost_per_action={"retry_payment": bad_cost},
+            )
+
+    # 2. success_action_rates: NaN, +inf, -inf, <0, >1
+    for bad_rate in [float("nan"), float("inf"), float("-inf"), -0.1, 1.1]:
+        with pytest.raises(ValidationError, match="must be in range"):
+            RecoveryScenario(
+                **base_kwargs,
+                success_action_rates={"retry_payment": bad_rate},
+            )
+
+    # 3. Valid numbers pass
+    scen_ok = RecoveryScenario(
+        **base_kwargs,
+        cost_per_action={"retry_payment": 0.0, "payment_link": 10.5},
+        success_action_rates={"retry_payment": 0.0, "payment_link": 1.0},
+    )
+    assert scen_ok.cost_per_action["retry_payment"] == 0.0
+    assert scen_ok.success_action_rates["payment_link"] == 1.0
+
+
+def test_additional_finding4_deep_freeze_recovery_mappings():
+    """
+    Ensure RecoveryScenario and RecoveryBenchmarkReport mappings are deep-frozen
+    to prevent mutation of model state after construction.
+    """
+    cost_dict = {"retry_payment": 5.0}
+    rates_dict = {"retry_payment": 0.8}
+
+    scen = RecoveryScenario(
+        scenario_id="freeze_test",
+        context=_dummy_context(),
+        payment_amount=1000.0,
+        failure_category="soft_decline",
+        expected_recoverable_amount=1000.0,
+        cost_per_action=cost_dict,
+        success_action_rates=rates_dict,
+    )
+
+    # 1. Modifying source dict does not affect model
+    cost_dict["retry_payment"] = 999.0
+    assert scen.cost_per_action["retry_payment"] == 5.0
+
+    # 2. Attempting to mutate model mapping raises TypeError
+    with pytest.raises(TypeError):
+        scen.cost_per_action["retry_payment"] = 100.0  # type: ignore[index]
+
+    with pytest.raises(TypeError):
+        scen.success_action_rates["retry_payment"] = 0.5  # type: ignore[index]
+
+    # 3. Deep freeze on RecoveryBenchmarkReport
+    meta_dict = {"source": "test", "tags": {"env": "staging", "nested_list": [1, 2]}}
+    cat_dict = {"card_expired": {"recovered": 500.0}}
+
+    rep = RecoveryBenchmarkReport(
+        pipeline_name="test_pipe",
+        dataset_name="test_dataset",
+        num_scenarios=1,
+        total_attempted_revenue=1000.0,
+        total_recoverable_revenue=1000.0,
+        total_recovered_revenue=500.0,
+        recovery_rate=0.5,
+        gross_recovered_amount=500.0,
+        total_intervention_cost=10.0,
+        net_recovered_amount=490.0,
+        average_recovered_per_case=500.0,
+        average_net_per_case=490.0,
+        policy_violation_rate=0.0,
+        stopping_rule_violation_rate=0.0,
+        unnecessary_intervention_rate=0.0,
+        duplicate_action_rate=0.0,
+        category_breakdown=cat_dict,
+        metadata=meta_dict,
+    )
+
+    # Modifying caller nested structures does not affect model
+    meta_dict["tags"]["env"] = "mutated"
+    assert rep.metadata["tags"]["env"] == "staging"
+
+    # Nested mapping in category_breakdown cannot be mutated
+    with pytest.raises(TypeError):
+        rep.category_breakdown["card_expired"]["recovered"] = 999.0  # type: ignore[index]
+
+    # Nested mapping in metadata cannot be mutated
+    with pytest.raises(TypeError):
+        rep.metadata["tags"]["env"] = "mutated_direct"  # type: ignore[index]
+
+    # Serialization produces standard dicts
+    dumped = rep.model_dump(mode="json")
+    assert isinstance(dumped["category_breakdown"], dict)
+    assert isinstance(dumped["metadata"], dict)
+    assert dumped["metadata"]["tags"]["env"] == "staging"

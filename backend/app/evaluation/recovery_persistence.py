@@ -77,7 +77,7 @@ def save_recovery_report(
             f"report must be RecoveryBenchmarkReport, got {type(report).__name__}"
         )
 
-    target_dir = get_recovery_evaluation_directory(directory)
+    target_dir = get_recovery_evaluation_directory(directory).resolve()
     timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     clean_id = (
         report_id
@@ -86,7 +86,12 @@ def save_recovery_report(
     if not clean_id.endswith(".json"):
         clean_id = f"{clean_id}.json"
 
-    file_path = target_dir / clean_id
+    file_path = (target_dir / clean_id).resolve()
+    if file_path.parent != target_dir:
+        raise ValueError(
+            f"report_id '{report_id}' must be a filename without path components or directory traversal."
+        )
+
     if file_path.exists() and not overwrite:
         raise FileExistsError(
             f"Recovery report '{clean_id}' already exists at {file_path}. Use overwrite=True to replace."
