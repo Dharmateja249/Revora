@@ -217,6 +217,10 @@ class OpenAILLMProvider:
             raise LLMResponseValidationError(
                 f"OpenAI structured response validation error: {exc}"
             ) from exc
+        except ValidationError as exc:
+            raise LLMResponseValidationError(
+                f"OpenAI structured response schema validation failed: {exc}"
+            ) from exc
         except openai.APIStatusError as exc:
             raise LLMProviderError(
                 f"OpenAI API status error ({exc.status_code}): {exc.message}"
@@ -224,6 +228,10 @@ class OpenAILLMProvider:
         except openai.OpenAIError as exc:
             raise LLMProviderError(f"OpenAI provider error: {exc}") from exc
         except Exception as exc:
+            if isinstance(exc, ValidationError):
+                raise LLMResponseValidationError(
+                    f"OpenAI structured response schema validation failed: {exc}"
+                ) from exc
             if isinstance(exc, (TypeError, ValueError, LLMProviderError)):
                 raise
             raise LLMProviderError(f"Unexpected provider failure: {exc}") from exc

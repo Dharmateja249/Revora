@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import openai
 import pytest
+from pydantic import ValidationError
 
 from app.agent.openai_provider import (
     OpenAILLMProvider,
@@ -497,6 +498,26 @@ async def test_response_validation_invalid_schema_fields(sample_messages):
 
     with pytest.raises(LLMResponseValidationError, match="validation"):
         await provider2.generate(sample_messages)
+
+
+@pytest.mark.anyio
+async def test_response_validation_pydantic_validation_error_from_parser(
+    sample_messages,
+):
+    """Verify pydantic.ValidationError raised by parse() is mapped to LLMResponseValidationError."""
+    try:
+        LLMRecoveryRecommendation.model_validate({"confidence": 2.5})
+    except ValidationError as err:
+        validation_error = err
+
+    mock_client = _create_mock_client(side_effect=validation_error)
+    provider = OpenAILLMProvider(api_key="sk-test", client=mock_client)
+
+    with pytest.raises(LLMResponseValidationError) as exc_info:
+        await provider.generate(sample_messages)
+
+    assert isinstance(exc_info.value, LLMProviderError)
+    assert "schema validation failed" in str(exc_info.value).lower()
 
 
 # ============================================================================
