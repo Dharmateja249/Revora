@@ -16,6 +16,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.agent.factory import create_llm_provider
+from app.agent.gemini_provider import GeminiLLMProvider
+from app.agent.huggingface_provider import HuggingFaceLLMProvider
 from app.agent.openai_provider import OpenAILLMProvider
 from app.agent.provider import (
     LLMAuthenticationError,
@@ -25,7 +27,7 @@ from app.agent.provider import (
     MockLLMProvider,
 )
 from app.agent.schemas import LLMRecoveryRecommendation
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.decision_engine import RecoveryAction
 
 
@@ -223,7 +225,8 @@ def test_factory_invalid_config_type_raises():
 def test_factory_invalid_timeout_in_dict_raises():
     """Verify malformed timeout in dictionary raises LLMProviderConfigurationError."""
     config = {
-        "LLM_PROVIDER": "mock",
+        "LLM_PROVIDER": "openai",
+        "OPENAI_API_KEY": "sk-dict-key",
         "OPENAI_TIMEOUT_SECONDS": "not-a-number",
     }
     with pytest.raises(LLMProviderConfigurationError, match="Invalid timeout value"):
@@ -255,3 +258,128 @@ def test_factory_creates_independent_instances():
     assert p1 is not p2
     assert isinstance(p1, MockLLMProvider)
     assert isinstance(p2, MockLLMProvider)
+
+
+def test_factory_multi_provider_env_vars_isolation(monkeypatch):
+    """Verify that when multiple provider env vars coexist, only the selected provider's config is used."""
+    get_settings.cache_clear()
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-key")
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-custom")
+    monkeypatch.setenv("OPENAI_TIMEOUT_SECONDS", "18.0")
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-api-key")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-pro")
+    monkeypatch.setenv("GEMINI_TIMEOUT_SECONDS", "22.0")
+
+    monkeypatch.setenv("HF_TOKEN", "hf-token-custom")
+    monkeypatch.setenv("HF_MODEL", "Qwen/Qwen3-32B-Custom")
+    monkeypatch.setenv("HF_TIMEOUT_SECONDS", "26.0")
+
+    try:
+        # 1. Select Gemini -> must NOT use HF_TOKEN or OPENAI_API_KEY
+        monkeypatch.setenv("LLM_PROVIDER", "gemini")
+        gem_provider = create_llm_provider(client=MagicMock())
+        assert isinstance(gem_provider, GeminiLLMProvider)
+        assert gem_provider.provider_name == "gemini"
+        assert gem_provider._api_key == "gemini-api-key"
+        assert gem_provider.model_name == "gemini-2.5-pro"
+        assert gem_provider.timeout_seconds == 22.0
+
+        # 2. Select Hugging Face -> must NOT use GEMINI_API_KEY or OPENAI_API_KEY
+        get_settings.cache_clear()
+        monkeypatch.setenv("LLM_PROVIDER", "huggingface")
+        hf_provider = create_llm_provider(client=MagicMock())
+        assert isinstance(hf_provider, HuggingFaceLLMProvider)
+        assert hf_provider.provider_name == "huggingface"
+        assert hf_provider._token == "hf-token-custom"
+        assert hf_provider.model_name == "Qwen/Qwen3-32B-Custom"
+        assert hf_provider.timeout_seconds == 26.0
+
+        # 3. Select OpenAI -> must NOT use GEMINI_API_KEY or HF_TOKEN
+        get_settings.cache_clear()
+        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        openai_client = MagicMock()
+        oai_provider = create_llm_provider(client=openai_client)
+        assert isinstance(oai_provider, OpenAILLMProvider)
+        assert oai_provider.provider_name == "openai"
+        assert oai_provider.model_name == "gpt-4o-custom"
+        assert oai_provider.timeout_seconds == 18.0
+    finally:
+        get_settings.cache_clear()
+
+
+def test_factory_multi_provider_dict_config_isolation():
+    """Verify that dict config with multiple provider keys resolves only the selected provider's config."""
+    multi_config = {
+        "OPENAI_API_KEY": "sk-dict-openai",
+        "OPENAI_MODEL": "gpt-4o-mini-dict",
+        "OPENAI_TIMEOUT_SECONDS": "15.0",
+        "GEMINI_API_KEY": "gemini-dict-key",
+        "GEMINI_MODEL": "gemini-2.5-flash-dict",
+        "GEMINI_TIMEOUT_SECONDS": "25.0",
+        "HF_TOKEN": "hf-dict-token",
+        "HF_MODEL": "Qwen/Qwen3-32B-Dict",
+        "HF_TIMEOUT_SECONDS": "35.0",
+    }
+
+    # Gemini config
+    gem_config = dict(multi_config, LLM_PROVIDER="gemini")
+    gem_prov = create_llm_provider(gem_config, client=MagicMock())
+    assert isinstance(gem_prov, GeminiLLMProvider)
+    assert gem_prov._api_key == "gemini-dict-key"
+    assert gem_prov.model_name == "gemini-2.5-flash-dict"
+    assert gem_prov.timeout_seconds == 25.0
+
+    # HF config
+    hf_config = dict(multi_config, LLM_PROVIDER="huggingface")
+    hf_prov = create_llm_provider(hf_config, client=MagicMock())
+    assert isinstance(hf_prov, HuggingFaceLLMProvider)
+    assert hf_prov._token == "hf-dict-token"
+    assert hf_prov.model_name == "Qwen/Qwen3-32B-Dict"
+    assert hf_prov.timeout_seconds == 35.0
+
+    # OpenAI config
+    oai_config = dict(multi_config, LLM_PROVIDER="openai")
+    oai_prov = create_llm_provider(oai_config, client=MagicMock())
+    assert isinstance(oai_prov, OpenAILLMProvider)
+    assert oai_prov.model_name == "gpt-4o-mini-dict"
+    assert oai_prov.timeout_seconds == 15.0
+
+
+def test_factory_explicit_arguments_override_provider_keys():
+    """Verify explicit api_key, model, timeout_seconds override both provider keys and generic keys."""
+    config = {
+        "LLM_PROVIDER": "gemini",
+        "GEMINI_API_KEY": "gemini-key-from-config",
+        "GEMINI_MODEL": "gemini-model-from-config",
+        "GEMINI_TIMEOUT_SECONDS": "20.0",
+        "LLM_API_KEY": "llm-key-from-config",
+        "LLM_MODEL": "llm-model-from-config",
+        "LLM_TIMEOUT_SECONDS": "10.0",
+    }
+    prov = create_llm_provider(
+        config,
+        api_key="explicit-key-override",
+        model="explicit-model-override",
+        timeout_seconds=55.0,
+        client=MagicMock(),
+    )
+    assert isinstance(prov, GeminiLLMProvider)
+    assert prov._api_key == "explicit-key-override"
+    assert prov.model_name == "explicit-model-override"
+    assert prov.timeout_seconds == 55.0
+
+
+def test_factory_generic_fallback_when_provider_keys_absent():
+    """Verify generic LLM_API_KEY, LLM_MODEL, LLM_TIMEOUT_SECONDS act as fallback."""
+    config = {
+        "LLM_PROVIDER": "huggingface",
+        "LLM_API_KEY": "generic-hf-key",
+        "LLM_MODEL": "generic-hf-model",
+        "LLM_TIMEOUT_SECONDS": "42.0",
+    }
+    prov = create_llm_provider(config, client=MagicMock())
+    assert isinstance(prov, HuggingFaceLLMProvider)
+    assert prov._token == "generic-hf-key"
+    assert prov.model_name == "generic-hf-model"
+    assert prov.timeout_seconds == 42.0

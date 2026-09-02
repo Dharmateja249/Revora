@@ -6,6 +6,11 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
+from fastapi import status
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
 from app.database import Base, get_db
 from app.decision_engine import RecoveryAction
 from app.historical_retrieval import HistoricalCase
@@ -20,10 +25,6 @@ from app.models import (
 from app.policies.registry import DEFAULT_POLICY_VERSION
 from app.recovery_service import RecoveryService
 from app.schemas.recovery import RecoveryEvaluationRequest
-from fastapi import status
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture
@@ -179,9 +180,11 @@ def test_api_endpoint_returns_policy_telemetry(
     client = TestClient(app)
 
     try:
+        from app.auth import create_access_token
+
         response = client.post(
             "/v1/recovery/evaluate-decision",
-            headers={"Authorization": f"Bearer {customer.id}"},
+            headers={"Authorization": f"Bearer {create_access_token(customer.id)}"},
             json={
                 "customer_id": str(customer.id),
                 "payment_id": str(curr_payment.id),

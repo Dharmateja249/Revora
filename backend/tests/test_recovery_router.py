@@ -25,6 +25,13 @@ import uuid
 from datetime import timedelta
 
 import pytest
+from fastapi import status
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.auth import create_access_token
 from app.database import Base, get_db
 from app.decision_engine import RecoveryAction
 from app.embedding_service import get_embedding_service
@@ -37,11 +44,11 @@ from app.schemas.recovery import (
     RecoveryEvaluationResponse,
 )
 from app.vector_index import get_vector_index
-from fastapi import status
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
+
+
+def _auth_headers(cust_id) -> dict[str, str]:
+    return {"Authorization": f"Bearer {create_access_token(cust_id)}"}
+
 
 # ============================================================================
 # Database & TestClient Fixtures
@@ -137,7 +144,7 @@ def test_evaluate_decision_endpoint_happy_path(client, test_db_session):
         "payment_id": str(payment.id),
         "use_rag": True,
     }
-    headers = {"Authorization": f"Bearer {customer.id}"}
+    headers = _auth_headers(customer.id)
 
     response = client.post(
         "/v1/recovery/evaluate-decision", json=payload, headers=headers
@@ -173,7 +180,7 @@ def test_evaluate_decision_endpoint_rag_disabled(client, test_db_session):
         "payment_id": str(payment.id),
         "use_rag": False,
     }
-    headers = {"Authorization": f"Bearer {customer.id}"}
+    headers = _auth_headers(customer.id)
 
     response = client.post(
         "/v1/recovery/evaluate-decision", json=payload, headers=headers
@@ -228,7 +235,7 @@ def test_cross_customer_request_rejected_403(client, test_db_session):
         "customer_id": str(cust_b.id),
         "payment_id": str(pay_b.id),
     }
-    headers = {"Authorization": f"Bearer {cust_a.id}"}
+    headers = _auth_headers(cust_a.id)
 
     resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
     assert resp.status_code == status.HTTP_403_FORBIDDEN
@@ -248,7 +255,7 @@ def test_authorization_failure_causes_zero_database_mutation(client, test_db_ses
         "customer_id": str(cust_b.id),
         "payment_id": str(pay_b.id),
     }
-    headers = {"Authorization": f"Bearer {cust_a.id}"}
+    headers = _auth_headers(cust_a.id)
 
     resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
     assert resp.status_code == status.HTTP_403_FORBIDDEN
@@ -270,7 +277,7 @@ def test_authorization_failure_causes_zero_database_mutation(client, test_db_ses
 def test_request_validation_missing_fields(client):
     """Verify missing required identifiers return 422 Unprocessable Entity."""
     cust_id = uuid.uuid4()
-    headers = {"Authorization": f"Bearer {cust_id}"}
+    headers = _auth_headers(cust_id)
 
     # Missing payment_id
     resp = client.post(
@@ -296,7 +303,7 @@ def test_request_validation_missing_fields(client):
 def test_request_validation_malformed_uuid(client):
     """Verify malformed UUID string returns 422."""
     cust_id = uuid.uuid4()
-    headers = {"Authorization": f"Bearer {cust_id}"}
+    headers = _auth_headers(cust_id)
     payload = {
         "customer_id": "not-a-uuid",
         "payment_id": str(uuid.uuid4()),
@@ -308,7 +315,7 @@ def test_request_validation_malformed_uuid(client):
 def test_request_validation_extra_fields(client):
     """Verify unexpected/extra fields in payload return 422."""
     cust_id = uuid.uuid4()
-    headers = {"Authorization": f"Bearer {cust_id}"}
+    headers = _auth_headers(cust_id)
     payload = {
         "customer_id": str(cust_id),
         "payment_id": str(uuid.uuid4()),
@@ -330,7 +337,7 @@ def test_customer_not_found_returns_404(client, test_db_session):
         "customer_id": non_existent_cust_id,
         "payment_id": str(uuid.uuid4()),
     }
-    headers = {"Authorization": f"Bearer {non_existent_cust_id}"}
+    headers = _auth_headers(non_existent_cust_id)
     resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
     assert resp.status_code == status.HTTP_404_NOT_FOUND
     assert non_existent_cust_id in resp.json()["detail"]
@@ -345,7 +352,7 @@ def test_payment_not_found_returns_404(client, test_db_session):
         "customer_id": str(customer.id),
         "payment_id": non_existent_pay_id,
     }
-    headers = {"Authorization": f"Bearer {customer.id}"}
+    headers = _auth_headers(customer.id)
     resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
     assert resp.status_code == status.HTTP_404_NOT_FOUND
     assert non_existent_pay_id in resp.json()["detail"]
@@ -361,7 +368,7 @@ def test_payment_customer_mismatch_returns_403(client, test_db_session):
         "customer_id": str(customer2.id),
         "payment_id": str(payment1.id),
     }
-    headers = {"Authorization": f"Bearer {customer2.id}"}
+    headers = _auth_headers(customer2.id)
     resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
     assert resp.status_code == status.HTTP_403_FORBIDDEN
     assert "belongs to customer" in resp.json()["detail"]
@@ -377,7 +384,7 @@ def test_opportunity_not_found_returns_404(client, test_db_session):
         "customer_id": str(customer.id),
         "payment_id": str(payment.id),
     }
-    headers = {"Authorization": f"Bearer {customer.id}"}
+    headers = _auth_headers(customer.id)
     resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
     assert resp.status_code == status.HTTP_404_NOT_FOUND
     assert "Recovery opportunity" in resp.json()["detail"]
@@ -421,7 +428,7 @@ def test_service_isolation_with_dependency_override(client):
         "customer_id": str(stub.customer_id),
         "payment_id": str(stub.payment_id),
     }
-    headers = {"Authorization": f"Bearer {stub.customer_id}"}
+    headers = _auth_headers(stub.customer_id)
     resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
 
     assert resp.status_code == status.HTTP_200_OK
@@ -466,7 +473,7 @@ def test_shared_vector_index_persistence_across_requests(client, test_db_session
         "payment_id": str(payment.id),
         "use_rag": True,
     }
-    headers = {"Authorization": f"Bearer {customer.id}"}
+    headers = _auth_headers(customer.id)
 
     resp1 = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
     assert resp1.status_code == status.HTTP_200_OK
@@ -566,7 +573,7 @@ def test_router_agent_enabled_without_orchestrator_falls_back_to_deterministic(
         "payment_id": str(payment.id),
         "use_rag": False,
     }
-    headers = {"Authorization": f"Bearer {customer.id}"}
+    headers = _auth_headers(customer.id)
 
     resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
     assert resp.status_code == status.HTTP_200_OK
@@ -595,7 +602,7 @@ def test_router_request_level_use_agent_false_overrides_enabled_service(
         "use_rag": False,
         "use_agent": False,
     }
-    headers = {"Authorization": f"Bearer {customer.id}"}
+    headers = _auth_headers(customer.id)
 
     resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
     assert resp.status_code == status.HTTP_200_OK
@@ -635,7 +642,7 @@ def test_router_custom_orchestrator_dependency_injection(client, test_db_session
         "payment_id": str(payment.id),
         "use_rag": False,
     }
-    headers = {"Authorization": f"Bearer {customer.id}"}
+    headers = _auth_headers(customer.id)
 
     resp = client.post("/v1/recovery/evaluate-decision", json=payload, headers=headers)
     assert resp.status_code == status.HTTP_200_OK

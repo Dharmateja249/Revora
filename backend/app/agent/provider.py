@@ -12,7 +12,12 @@ from app.agent.schemas import LLMRecoveryRecommendation
 
 if TYPE_CHECKING:
     from app.agent.factory import create_llm_provider
-    from app.agent.openai_provider import OpenAILLMProvider, RealLLMProvider
+    from app.agent.gemini_provider import GeminiLLMProvider  # noqa: F401
+    from app.agent.huggingface_provider import HuggingFaceLLMProvider  # noqa: F401
+    from app.agent.openai_provider import (
+        OpenAILLMProvider,
+        RealLLMProvider,
+    )
 
 SUPPORTED_MESSAGE_ROLES = frozenset({"system", "user", "assistant"})
 

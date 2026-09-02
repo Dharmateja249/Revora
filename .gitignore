@@ -11,13 +11,15 @@ ENV/
 *.db
 *.sqlite3
 
-# Node / Next.js
+# Node / Frontend
 frontend/node_modules/
 frontend/.next/
 frontend/out/
+frontend/dist/
 node_modules/
 .next/
 out/
+dist/
 .vercel
 
 # Environment variables
