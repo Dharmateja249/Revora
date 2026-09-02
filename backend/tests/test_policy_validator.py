@@ -3,8 +3,10 @@ Unit tests for Revora Deterministic Policy Validator.
 """
 
 import pytest
+
 from app.decision_engine import RecoveryAction
 from app.policies.registry import (
+    REVORA_INSUFFICIENT_FUNDS_RULE,
     RZP_CUSTOMER_AUTH_2FA_REQUIRED_RULE,
     RZP_PERMANENT_CREDENTIAL_ERROR_RULE,
     SAFETY_MAX_ATTEMPTS_RULE,
@@ -167,3 +169,93 @@ def test_invalid_types_raise_type_error(validator):
 
     with pytest.raises(TypeError):
         validator.validate_decision(RecoveryAction.PAYMENT_LINK, {"not": "a_context"})
+
+
+def test_select_fallback_action_uses_valid_mandatory_fallback(validator):
+    """Verify select_fallback_action returns mandatory_fallback_action when allowed and not prohibited."""
+    policy_ctx = RecoveryPolicyContext(
+        provider="razorpay",
+        policy_version="2026.1",
+        applicable_rules=(RZP_CUSTOMER_AUTH_2FA_REQUIRED_RULE,),
+        allowed_actions=(
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        prohibited_actions=(RecoveryAction.RETRY_PAYMENT,),
+        mandatory_fallback_action=RecoveryAction.PAYMENT_LINK,
+    )
+    fallback = validator.select_fallback_action(policy_ctx)
+    assert fallback == RecoveryAction.PAYMENT_LINK
+
+
+def test_select_fallback_action_skips_prohibited_mandatory_fallback_and_uses_applicable_rule(
+    validator,
+):
+    """Verify select_fallback_action skips prohibited mandatory_fallback_action and uses applicable rule."""
+    policy_ctx = RecoveryPolicyContext(
+        provider="razorpay",
+        policy_version="2026.1",
+        applicable_rules=(RZP_CUSTOMER_AUTH_2FA_REQUIRED_RULE,),
+        allowed_actions=(
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        prohibited_actions=(RecoveryAction.RETRY_PAYMENT,),
+        # Intentionally invalid/prohibited mandatory fallback
+        mandatory_fallback_action=RecoveryAction.RETRY_PAYMENT,
+    )
+    fallback = validator.select_fallback_action(policy_ctx)
+    assert fallback == RecoveryAction.PAYMENT_LINK
+    assert fallback not in policy_ctx.prohibited_actions
+
+
+def test_select_fallback_action_uses_priority_ordered_applicable_rules(validator):
+    """Verify select_fallback_action respects rule priority when primary rule fallback is prohibited."""
+    policy_ctx = RecoveryPolicyContext(
+        provider="razorpay",
+        policy_version="2026.1",
+        # RZP_CUSTOMER_AUTH_2FA_REQUIRED has priority 800 (mandatory: PAYMENT_LINK)
+        # REVORA_INSUFFICIENT_FUNDS has priority 500 (mandatory: WAIT_AND_RETRY)
+        applicable_rules=(
+            RZP_CUSTOMER_AUTH_2FA_REQUIRED_RULE,
+            REVORA_INSUFFICIENT_FUNDS_RULE,
+        ),
+        allowed_actions=(
+            RecoveryAction.WAIT_AND_RETRY,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        # PAYMENT_LINK is prohibited here
+        prohibited_actions=(
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.RETRY_PAYMENT,
+        ),
+        mandatory_fallback_action=None,
+    )
+    fallback = validator.select_fallback_action(policy_ctx)
+    # RZP_CUSTOMER_AUTH_2FA_REQUIRED fallback (PAYMENT_LINK) is prohibited,
+    # so it falls through to REVORA_INSUFFICIENT_FUNDS fallback (WAIT_AND_RETRY)
+    assert fallback == RecoveryAction.WAIT_AND_RETRY
+    assert fallback not in policy_ctx.prohibited_actions
+
+
+def test_select_fallback_action_fails_closed_when_all_prohibited(validator):
+    """Verify select_fallback_action raises ValueError when no compliant action exists."""
+    policy_ctx = RecoveryPolicyContext(
+        provider="razorpay",
+        policy_version="2026.1",
+        applicable_rules=(),
+        allowed_actions=(RecoveryAction.RETRY_PAYMENT, RecoveryAction.NO_ACTION),
+        prohibited_actions=(RecoveryAction.RETRY_PAYMENT, RecoveryAction.NO_ACTION),
+    )
+    with pytest.raises(
+        ValueError, match="no policy-compliant recovery action available"
+    ):
+        validator.select_fallback_action(policy_ctx)
+
+
+def test_select_fallback_action_type_error_for_invalid_input(validator):
+    """Verify select_fallback_action raises TypeError on invalid context type."""
+    with pytest.raises(
+        TypeError, match="Expected policy_context to be RecoveryPolicyContext"
+    ):
+        validator.select_fallback_action("invalid_context")  # type: ignore

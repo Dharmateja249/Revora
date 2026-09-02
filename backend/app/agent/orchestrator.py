@@ -10,6 +10,7 @@ import time
 from collections.abc import Sequence
 
 from app.agent.context_builder import AgentContextBuilder
+from app.agent.factory import create_llm_provider
 from app.agent.prompts import build_agent_messages
 from app.agent.provider import LLMProvider, LLMProviderError
 from app.agent.schemas import (
@@ -47,28 +48,45 @@ class AgentOrchestrator:
 
     def __init__(
         self,
-        provider: LLMProvider,
+        provider: LLMProvider | None = None,
         context_builder: AgentContextBuilder | None = None,
         policy_validator: PolicyValidator | None = None,
+        *,
+        llm_provider: LLMProvider | None = None,
     ):
         """
         Initialize the AgentOrchestrator with required and optional components.
 
         Args:
-            provider: Component implementing the LLMProvider protocol.
+            provider: Component implementing the LLMProvider protocol (or resolved via factory if None).
             context_builder: Optional custom AgentContextBuilder (defaults to standard builder).
             policy_validator: Optional custom PolicyValidator (defaults to standard validator).
+            llm_provider: Optional alias for provider dependency injection.
 
         Raises:
             TypeError: If any injected dependency violates expected types/contracts.
+            ValueError: If conflicting provider instances are passed.
         """
         if (
-            not isinstance(provider, LLMProvider)
-            or not hasattr(provider, "generate")
-            or not callable(provider.generate)
+            provider is not None
+            and llm_provider is not None
+            and provider is not llm_provider
+        ):
+            raise ValueError(
+                "Cannot specify both 'provider' and 'llm_provider' with different instances."
+            )
+
+        resolved_provider = provider if provider is not None else llm_provider
+        if resolved_provider is None:
+            resolved_provider = create_llm_provider()
+
+        if (
+            not isinstance(resolved_provider, LLMProvider)
+            or not hasattr(resolved_provider, "generate")
+            or not callable(resolved_provider.generate)
         ):
             raise TypeError(
-                f"Expected provider implementing LLMProvider protocol, got {type(provider).__name__}"
+                f"Expected provider implementing LLMProvider protocol, got {type(resolved_provider).__name__}"
             )
 
         if context_builder is not None and not isinstance(
@@ -85,13 +103,18 @@ class AgentOrchestrator:
                 f"Expected policy_validator to be PolicyValidator, got {type(policy_validator).__name__}"
             )
 
-        self._provider = provider
+        self._provider = resolved_provider
         self._context_builder = context_builder or AgentContextBuilder()
         self._policy_validator = policy_validator or PolicyValidator()
 
     @property
     def provider(self) -> LLMProvider:
         """Return the active LLM provider."""
+        return self._provider
+
+    @property
+    def llm_provider(self) -> LLMProvider:
+        """Alias for provider property."""
         return self._provider
 
     @property
@@ -219,32 +242,13 @@ class AgentOrchestrator:
         """
         Deterministically select a safe fallback recovery action strictly compliant with policy.
 
-        Enforces the invariant that the fallback action must be in allowed_actions
-        and must not be in prohibited_actions.
-
-        Raises:
-            ValueError: If no policy-compliant fallback action can be determined.
+        Delegates to PolicyValidator as the final safety authority, ensuring:
+        1. Primary mandatory fallback action is selected if compliant.
+        2. Priority-ordered applicable rule fallbacks are respected.
+        3. Prohibited actions are never selected.
+        4. Fails closed with ValueError if no policy-compliant fallback exists.
         """
-        if (
-            policy_context.mandatory_fallback_action is not None
-            and policy_context.mandatory_fallback_action
-            in policy_context.allowed_actions
-            and policy_context.mandatory_fallback_action
-            not in policy_context.prohibited_actions
-        ):
-            return policy_context.mandatory_fallback_action
-
-        compliant_actions = [
-            a
-            for a in policy_context.allowed_actions
-            if a not in policy_context.prohibited_actions
-        ]
-        if compliant_actions:
-            return compliant_actions[0]
-
-        raise ValueError(
-            "Cannot establish deterministic fallback: no policy-compliant recovery action available in policy context."
-        )
+        return self._policy_validator.select_fallback_action(policy_context)
 
     def _build_deterministic_fallback_result(
         self,
@@ -261,8 +265,20 @@ class AgentOrchestrator:
         fallback_action = self._select_deterministic_fallback_action(policy_context)
         error_type_name = type(exception).__name__
 
+        # Ensure PolicyValidator remains the final safety authority
+        validation = self._policy_validator.validate_decision(
+            candidate_action=fallback_action,
+            policy_context=policy_context,
+        )
+        safe_action = validation.effective_action
+        if safe_action in policy_context.prohibited_actions:
+            raise ValueError(
+                f"PolicyValidator safety invariant violation: fallback action '{safe_action.value}' "
+                f"is in prohibited actions."
+            )
+
         fallback_rec = LLMRecoveryRecommendation(
-            recommended_action=fallback_action,
+            recommended_action=safe_action,
             confidence=0.0,
             reasoning="Deterministic fallback triggered due to LLM provider failure.",
             key_factors=("deterministic_fallback", "provider_error"),

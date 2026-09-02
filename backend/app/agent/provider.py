@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from app.agent.schemas import LLMRecoveryRecommendation
 
 if TYPE_CHECKING:
+    from app.agent.factory import create_llm_provider
     from app.agent.openai_provider import OpenAILLMProvider, RealLLMProvider
 
 SUPPORTED_MESSAGE_ROLES = frozenset({"system", "user", "assistant"})
@@ -18,6 +19,10 @@ SUPPORTED_MESSAGE_ROLES = frozenset({"system", "user", "assistant"})
 
 class LLMProviderError(Exception):
     """Base exception for all LLM provider execution or communication failures."""
+
+
+class LLMProviderConfigurationError(LLMProviderError, ValueError):
+    """Raised when an invalid or unsupported LLM provider is configured."""
 
 
 class LLMResponseValidationError(LLMProviderError):
@@ -164,6 +169,16 @@ class MockLLMProvider:
         self._recorded_messages: list[list[Mapping[str, str]]] = []
 
     @property
+    def provider_name(self) -> str:
+        """Return the provider identifier."""
+        return "mock"
+
+    @property
+    def model_name(self) -> str:
+        """Return the mock model identifier."""
+        return "mock-recovery-engine"
+
+    @property
     def recommendation(self) -> LLMRecoveryRecommendation:
         """Return the configured recommendation."""
         return self._recommendation
@@ -215,6 +230,10 @@ def __getattr__(name: str) -> Any:
         from app.agent.openai_provider import OpenAILLMProvider, RealLLMProvider
 
         return OpenAILLMProvider if name == "OpenAILLMProvider" else RealLLMProvider
+    if name == "create_llm_provider":
+        from app.agent.factory import create_llm_provider
+
+        return create_llm_provider
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -223,6 +242,7 @@ __all__ = [
     "LLMAuthenticationError",
     "LLMConnectionError",
     "LLMProvider",
+    "LLMProviderConfigurationError",
     "LLMProviderError",
     "LLMRateLimitError",
     "LLMResponseValidationError",
@@ -230,5 +250,6 @@ __all__ = [
     "MockLLMProvider",
     "OpenAILLMProvider",
     "RealLLMProvider",
+    "create_llm_provider",
     "validate_chat_messages",
 ]
