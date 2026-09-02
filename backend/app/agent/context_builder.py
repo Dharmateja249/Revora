@@ -16,6 +16,7 @@ from app.context import (
     CustomerRecoveryStatsContext,
     PaymentContext,
     RecoveryAttemptContext,
+    RecoveryOpportunityContext,
 )
 from app.decision_engine import RecoveryAction
 from app.historical_retrieval import HistoricalCase
@@ -28,7 +29,11 @@ class AgentContextBuilder:
     into a sanitized, PII-free AgentDecisionPromptContext for LLM consumption.
     """
 
-    def __init__(self, max_historical_cases: int = 5):
+    def __init__(
+        self,
+        max_historical_cases: int = 5,
+        max_attempts: int = 3,
+    ):
         if not isinstance(max_historical_cases, int) or isinstance(
             max_historical_cases, bool
         ):
@@ -39,7 +44,16 @@ class AgentContextBuilder:
             raise ValueError(
                 f"max_historical_cases must be a positive integer, got {max_historical_cases}"
             )
+        if not isinstance(max_attempts, int) or isinstance(max_attempts, bool):
+            raise TypeError(
+                f"max_attempts must be an integer, got {type(max_attempts).__name__}"
+            )
+        if max_attempts <= 0:
+            raise ValueError(
+                f"max_attempts must be a positive integer, got {max_attempts}"
+            )
         self.max_historical_cases = max_historical_cases
+        self.max_attempts = max_attempts
 
     def build_prompt_context(
         self,
@@ -76,6 +90,10 @@ class AgentContextBuilder:
             context.customer,
             context.recovery_statistics,
         )
+        attempt_budget_payload = self._build_attempt_budget(
+            context.current_opportunity,
+            context.current_payment_attempts,
+        )
         attempt_history_payload = self._build_attempt_history(
             context.current_payment_attempts
         )
@@ -87,6 +105,7 @@ class AgentContextBuilder:
         return AgentDecisionPromptContext(
             current_payment=current_payment_payload,
             customer_profile=customer_profile_payload,
+            attempt_budget=attempt_budget_payload,
             recovery_attempt_history=attempt_history_payload,
             historical_cases=historical_cases_payload,
             allowed_actions=allowed_actions,
@@ -94,6 +113,35 @@ class AgentContextBuilder:
             mandatory_fallback=mandatory_fallback,
             policy_constraints=policy_constraints,
         )
+
+    def _build_attempt_budget(
+        self,
+        opportunity: RecoveryOpportunityContext | None,
+        attempts: Sequence[RecoveryAttemptContext] | None,
+    ) -> dict[str, int]:
+        """
+        Construct sanitized attempt budget tracking attempt progress and limits.
+        Excludes opportunity_id, payment_id, customer_id, and any internal identifiers.
+        """
+        prior_count = len(attempts) if attempts else 0
+        current_attempt = prior_count + 1
+        max_attempts = self.max_attempts
+
+        # If opportunity status is terminal, remaining attempts should be 0
+        if opportunity is not None and getattr(opportunity, "status", None) in (
+            "recovered",
+            "failed",
+            "abandoned",
+        ):
+            remaining_attempts = 0
+        else:
+            remaining_attempts = max(0, max_attempts - current_attempt)
+
+        return {
+            "current_attempt": current_attempt,
+            "max_attempts": max_attempts,
+            "remaining_attempts": remaining_attempts,
+        }
 
     def _build_payment_context(
         self,

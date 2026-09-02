@@ -395,3 +395,51 @@ def test_run_recovery_cli_with_all_three_pipelines(tmp_path: Path, capsys):
     assert "₹" in captured.out
     assert "$" not in captured.out
     assert "USD" not in captured.out
+
+
+def test_run_recovery_cli_with_llm_provider_mock(capsys):
+    """Verify recovery CLI runs with --llm-provider mock completely offline."""
+    scenarios = get_synthetic_recovery_dataset()[:2]
+
+    exit_code = run_recovery_cli(
+        args=[
+            "-p",
+            "agent_rag",
+            "--llm-provider",
+            "mock",
+            "--no-save",
+            "--quiet",
+        ],
+        scenarios=scenarios,
+    )
+
+    assert exit_code == 0
+
+
+def test_run_recovery_cli_with_llm_provider_openai_missing_key_fails(
+    monkeypatch, capsys
+):
+    """Verify recovery CLI with --llm-provider openai fails clearly when key is missing."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", None)
+
+    scenarios = get_synthetic_recovery_dataset()[:1]
+
+    exit_code = run_recovery_cli(
+        args=[
+            "-p",
+            "agent_rag",
+            "--llm-provider",
+            "openai",
+            "--no-save",
+        ],
+        scenarios=scenarios,
+    )
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "OpenAI API key must be provided" in captured.err

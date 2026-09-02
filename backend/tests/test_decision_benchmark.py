@@ -28,6 +28,16 @@ from app.evaluation.decision_evaluator import (
 from app.evaluation.schemas import DecisionBenchmarkReport
 from tests.fixtures.retrieval_golden_dataset import get_golden_evaluation_cases
 
+
+@pytest.fixture(autouse=True)
+def _reset_settings_cache():
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 # =============================================================================
 # Pipeline Resolution Tests
 # =============================================================================
@@ -255,3 +265,102 @@ def test_run_decision_cli_invalid_pipeline_returns_exit_code_1(capsys):
     assert exit_code == 1
     captured = capsys.readouterr()
     assert "Error running decision benchmark" in captured.err
+
+
+def test_resolve_decision_pipeline_openai_provider_with_key(monkeypatch):
+    """Verify resolve_decision_pipeline constructs OpenAILLMProvider when requested with key."""
+    from app.agent.openai_provider import OpenAILLMProvider
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock-key-12345")
+    pipe = resolve_decision_pipeline("agent_rag", llm_provider="openai")
+
+    assert isinstance(pipe, AgentRAGPipeline)
+    assert pipe.name == "agent_rag"
+    assert isinstance(pipe._orchestrator.provider, OpenAILLMProvider)
+
+
+def test_resolve_decision_pipeline_openai_agent_rag_name_with_key(monkeypatch):
+    """Verify resolve_decision_pipeline supports openai_agent_rag name."""
+    from app.agent.openai_provider import OpenAILLMProvider
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mock-key-12345")
+    pipe = resolve_decision_pipeline("openai_agent_rag")
+
+    assert isinstance(pipe, AgentRAGPipeline)
+    assert pipe.name == "openai_agent_rag"
+    assert isinstance(pipe._orchestrator.provider, OpenAILLMProvider)
+
+
+def test_resolve_decision_pipeline_unsupported_llm_provider_raises_value_error():
+    """Verify resolve_decision_pipeline raises ValueError for unsupported llm_provider."""
+    with pytest.raises(ValueError, match="Unsupported LLM provider: 'opneai'"):
+        resolve_decision_pipeline("agent_rag", llm_provider="opneai")
+
+
+def test_resolve_decision_pipeline_openai_provider_missing_key_fails(monkeypatch):
+    """Verify resolve_decision_pipeline raises ValueError if OpenAI key is missing."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", None)
+
+    with pytest.raises(ValueError, match="OpenAI API key must be provided"):
+        resolve_decision_pipeline("agent_rag", llm_provider="openai")
+
+
+def test_resolve_decision_pipeline_mock_default():
+    """Verify default mock provider uses EvaluationAgentLLMProvider."""
+    from app.evaluation.agent_evaluation_provider import EvaluationAgentLLMProvider
+
+    pipe = resolve_decision_pipeline("agent_rag", llm_provider="mock")
+
+    assert isinstance(pipe, AgentRAGPipeline)
+    assert isinstance(pipe._orchestrator.provider, EvaluationAgentLLMProvider)
+
+
+def test_run_decision_cli_with_llm_provider_mock(capsys):
+    """Verify running decision CLI with --llm-provider mock succeeds offline."""
+    cases = get_golden_evaluation_cases()[:2]
+    exit_code = run_decision_cli(
+        args=[
+            "-p",
+            "agent_rag",
+            "--llm-provider",
+            "mock",
+            "--no-save",
+            "--quiet",
+        ],
+        evaluation_cases=cases,
+    )
+
+    assert exit_code == 0
+
+
+def test_run_decision_cli_with_llm_provider_openai_missing_key_fails(
+    monkeypatch, capsys
+):
+    """Verify running decision CLI with --llm-provider openai fails cleanly when key missing."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", None)
+
+    cases = get_golden_evaluation_cases()[:1]
+    exit_code = run_decision_cli(
+        args=[
+            "-p",
+            "agent_rag",
+            "--llm-provider",
+            "openai",
+            "--no-save",
+        ],
+        evaluation_cases=cases,
+    )
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "OpenAI API key must be provided" in captured.err

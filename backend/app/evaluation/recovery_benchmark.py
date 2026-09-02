@@ -35,6 +35,7 @@ def run_recovery_benchmark(
     output_dir: Path | str | None = None,
     save_artifacts: bool = True,
     agent_orchestrator: AgentOrchestrator | None = None,
+    llm_provider: str = "mock",
 ) -> dict[str, RecoveryBenchmarkReport]:
     """
     Execute synthetic batch recovery outcome simulations across one or more pipelines.
@@ -46,6 +47,7 @@ def run_recovery_benchmark(
         output_dir: Output directory for benchmark artifacts.
         save_artifacts: Whether to write JSON/Markdown reports to disk.
         agent_orchestrator: Optional AgentOrchestrator instance for agent pipelines.
+        llm_provider: LLM provider identifier for agent pipelines ('mock' or 'openai'). Defaults to 'mock'.
 
     Returns:
         Dictionary mapping pipeline_name -> RecoveryBenchmarkReport.
@@ -65,7 +67,11 @@ def run_recovery_benchmark(
     )
 
     resolved_pipelines = [
-        resolve_decision_pipeline(p, agent_orchestrator=agent_orchestrator)
+        resolve_decision_pipeline(
+            p,
+            agent_orchestrator=agent_orchestrator,
+            llm_provider=llm_provider,
+        )
         for p in pipe_specs
     ]
 
@@ -173,6 +179,13 @@ def run_recovery_cli(
         action="append",
         dest="pipelines",
         help="Specify pipelines to evaluate (deterministic_baseline, deterministic_rag, agent_rag).",
+    )
+    parser.add_argument(
+        "--llm-provider",
+        type=str,
+        default="mock",
+        choices=["mock", "openai"],
+        help="LLM provider for agent pipelines ('mock' for offline evaluation, 'openai' for live OpenAI). Defaults to 'mock'.",
     )
     parser.add_argument(
         "--baseline",
@@ -312,6 +325,7 @@ def run_recovery_cli(
             pipelines=parsed.pipelines,
             output_dir=parsed.output_dir,
             save_artifacts=False,
+            llm_provider=parsed.llm_provider,
         )
 
         if not parsed.quiet and not parsed.json and not parsed.markdown:
