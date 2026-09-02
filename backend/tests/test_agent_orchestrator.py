@@ -4,8 +4,10 @@ Unit tests for Revora Adaptive Recovery Agent Decision Orchestrator.
 
 import uuid
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
 from app.agent.orchestrator import AgentOrchestrator
 from app.agent.provider import (
     LLMProviderError,
@@ -26,6 +28,7 @@ from app.context import (
 from app.decision_engine import RecoveryAction
 from app.historical_retrieval import HistoricalCase
 from app.policies.registry import (
+    REVORA_INSUFFICIENT_FUNDS_RULE,
     RZP_CUSTOMER_AUTH_2FA_REQUIRED_RULE,
     RZP_PERMANENT_CREDENTIAL_ERROR_RULE,
 )
@@ -739,3 +742,276 @@ async def test_provider_failure_sanitizes_fake_sensitive_exception_string(
         == "Deterministic fallback triggered due to LLM provider failure."
     )
     assert result.metadata["error_type"] == "LLMProviderError"
+
+
+# ============================================================================
+# Stage 8.2: Factory & Runtime Provider Integration Tests
+# ============================================================================
+
+
+def test_orchestrator_default_factory_construction(monkeypatch):
+    """Verify AgentOrchestrator() with no arguments resolves default MockLLMProvider."""
+    from app.config import Settings
+
+    monkeypatch.setattr(
+        "app.agent.factory.get_settings",
+        lambda: Settings(LLM_PROVIDER="mock"),
+    )
+    orchestrator = AgentOrchestrator()
+
+    assert orchestrator.provider is not None
+    assert isinstance(orchestrator.provider, MockLLMProvider)
+    assert orchestrator.llm_provider is orchestrator.provider
+
+
+def test_orchestrator_accepts_llm_provider_kwarg(valid_llm_recommendation):
+    """Verify AgentOrchestrator accepts llm_provider keyword argument as dependency injection."""
+    provider = MockLLMProvider(recommendation=valid_llm_recommendation)
+    orchestrator = AgentOrchestrator(llm_provider=provider)
+
+    assert orchestrator.provider is provider
+    assert orchestrator.llm_provider is provider
+
+
+def test_orchestrator_rejects_conflicting_providers(valid_llm_recommendation):
+    """Verify passing two different provider instances raises ValueError."""
+    p1 = MockLLMProvider(recommendation=valid_llm_recommendation)
+    p2 = MockLLMProvider(recommendation=valid_llm_recommendation)
+
+    with pytest.raises(ValueError, match="Cannot specify both"):
+        AgentOrchestrator(provider=p1, llm_provider=p2)
+
+
+@pytest.mark.anyio
+async def test_orchestrator_with_injected_openai_provider(
+    sample_customer_context,
+    sample_policy_context,
+    valid_llm_recommendation,
+):
+    """Verify AgentOrchestrator works with an injected OpenAILLMProvider without direct OpenAI dependency."""
+    from app.agent.openai_provider import OpenAILLMProvider
+
+    # Build mock parse response for OpenAILLMProvider
+    mock_choice = MagicMock()
+    mock_choice.finish_reason = "stop"
+    mock_choice.message.refusal = None
+    mock_choice.message.parsed = valid_llm_recommendation
+    mock_choice.message.content = None
+
+    mock_chat_completion = MagicMock()
+    mock_chat_completion.choices = [mock_choice]
+
+    mock_client = MagicMock()
+    mock_client.beta = MagicMock()
+    mock_client.beta.chat = MagicMock()
+    mock_client.beta.chat.completions = MagicMock()
+    mock_client.beta.chat.completions.parse = AsyncMock(
+        return_value=mock_chat_completion
+    )
+
+    provider = OpenAILLMProvider(
+        api_key="sk-test-key",
+        model="gpt-4o",
+        client=mock_client,
+    )
+
+    orchestrator = AgentOrchestrator(llm_provider=provider)
+
+    result = await orchestrator.decide(
+        context=sample_customer_context,
+        policy_context=sample_policy_context,
+    )
+
+    assert result.agent_used is True
+    assert result.is_fallback is False
+    assert result.provider == "openai"
+    assert result.model_name == "gpt-4o"
+    assert (
+        result.recommendation.recommended_action
+        == valid_llm_recommendation.recommended_action
+    )
+    assert result.recommendation.confidence == valid_llm_recommendation.confidence
+
+
+@pytest.mark.anyio
+async def test_orchestrator_openai_provider_failure_fails_closed(
+    sample_customer_context,
+    sample_policy_context,
+):
+    """Verify OpenAI provider error causes AgentOrchestrator to fail closed to deterministic fallback."""
+    import httpx
+    import openai
+
+    from app.agent.openai_provider import OpenAILLMProvider
+
+    req = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    resp = httpx.Response(401, request=req)
+    mock_client = MagicMock()
+    mock_client.beta.chat.completions.parse = AsyncMock(
+        side_effect=openai.AuthenticationError(
+            "Incorrect API key provided.", response=resp, body=None
+        )
+    )
+
+    provider = OpenAILLMProvider(
+        api_key="sk-test-invalid",
+        client=mock_client,
+    )
+    orchestrator = AgentOrchestrator(provider=provider)
+
+    result = await orchestrator.decide(
+        context=sample_customer_context,
+        policy_context=sample_policy_context,
+    )
+
+    assert result.agent_used is False
+    assert result.is_fallback is True
+    assert (
+        result.fallback_reason == "LLM provider failure; deterministic fallback applied"
+    )
+    assert result.provider == "openai"
+    assert result.metadata["error_type"] == "LLMAuthenticationError"
+    # Action must be safe and permitted by policy
+    assert (
+        result.recommendation.recommended_action
+        in sample_policy_context.allowed_actions
+    )
+    assert (
+        result.recommendation.recommended_action
+        not in sample_policy_context.prohibited_actions
+    )
+
+
+@pytest.mark.anyio
+async def test_orchestrator_openai_provider_prohibited_action_overridden(
+    sample_customer_context,
+    sample_policy_context,
+):
+    """Verify policy engine overrides prohibited action proposed by OpenAILLMProvider."""
+    from app.agent.openai_provider import OpenAILLMProvider
+
+    # Prohibited action recommendation
+    prohibited_rec = LLMRecoveryRecommendation(
+        recommended_action=RecoveryAction.RETRY_PAYMENT,  # Prohibited by 2FA policy
+        confidence=0.95,
+        reasoning="Aggressive retry advised.",
+    )
+
+    mock_choice = MagicMock()
+    mock_choice.finish_reason = "stop"
+    mock_choice.message.refusal = None
+    mock_choice.message.parsed = prohibited_rec
+    mock_choice.message.content = None
+
+    mock_chat_completion = MagicMock()
+    mock_chat_completion.choices = [mock_choice]
+
+    mock_client = MagicMock()
+    mock_client.beta.chat.completions.parse = AsyncMock(
+        return_value=mock_chat_completion
+    )
+
+    provider = OpenAILLMProvider(
+        api_key="sk-test",
+        client=mock_client,
+    )
+    orchestrator = AgentOrchestrator(llm_provider=provider)
+
+    result = await orchestrator.decide(
+        context=sample_customer_context,
+        policy_context=sample_policy_context,
+    )
+
+    # LLM was used, but candidate action was overridden by policy
+    assert result.agent_used is True
+    assert result.is_fallback is False
+    assert result.metadata["policy_overridden"] is True
+    assert result.recommendation.recommended_action != RecoveryAction.RETRY_PAYMENT
+    assert (
+        result.recommendation.recommended_action
+        not in sample_policy_context.prohibited_actions
+    )
+
+
+@pytest.mark.anyio
+async def test_orchestrator_fallback_selects_valid_mandatory_fallback_action(
+    sample_customer_context,
+    valid_llm_recommendation,
+):
+    """Verify orchestrator selects mandatory_fallback_action when valid and compliant."""
+    policy = RecoveryPolicyContext(
+        provider="razorpay",
+        policy_version="2026.1",
+        applicable_rules=(RZP_PERMANENT_CREDENTIAL_ERROR_RULE,),
+        allowed_actions=(
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.NO_ACTION,
+        ),
+        prohibited_actions=(
+            RecoveryAction.RETRY_PAYMENT,
+            RecoveryAction.WAIT_AND_RETRY,
+        ),
+        mandatory_fallback_action=RecoveryAction.CHANGE_PAYMENT_METHOD,
+    )
+    provider = MockLLMProvider(
+        recommendation=valid_llm_recommendation,
+        should_fail=True,
+        failure_exception=LLMProviderError("Upstream failure"),
+    )
+    orchestrator = AgentOrchestrator(provider=provider)
+
+    result = await orchestrator.decide(
+        context=sample_customer_context,
+        policy_context=policy,
+    )
+
+    assert result.is_fallback is True
+    assert result.agent_used is False
+    assert (
+        result.recommendation.recommended_action == RecoveryAction.CHANGE_PAYMENT_METHOD
+    )
+    assert result.recommendation.recommended_action not in policy.prohibited_actions
+
+
+@pytest.mark.anyio
+async def test_orchestrator_fallback_uses_applicable_rule_when_mandatory_fallback_prohibited(
+    sample_customer_context,
+    valid_llm_recommendation,
+):
+    """Verify orchestrator respects rule priority when primary mandatory fallback is prohibited."""
+    policy = RecoveryPolicyContext(
+        provider="razorpay",
+        policy_version="2026.1",
+        # RZP_CUSTOMER_AUTH_2FA_REQUIRED has priority 800 (mandatory: PAYMENT_LINK)
+        # REVORA_INSUFFICIENT_FUNDS has priority 500 (mandatory: WAIT_AND_RETRY)
+        applicable_rules=(
+            RZP_CUSTOMER_AUTH_2FA_REQUIRED_RULE,
+            REVORA_INSUFFICIENT_FUNDS_RULE,
+        ),
+        allowed_actions=(
+            RecoveryAction.WAIT_AND_RETRY,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        prohibited_actions=(
+            RecoveryAction.RETRY_PAYMENT,
+            RecoveryAction.PAYMENT_LINK,
+        ),
+        # Even if mandatory_fallback_action is set to a prohibited action
+        mandatory_fallback_action=RecoveryAction.PAYMENT_LINK,
+    )
+    provider = MockLLMProvider(
+        recommendation=valid_llm_recommendation,
+        should_fail=True,
+        failure_exception=LLMProviderError("Upstream failure"),
+    )
+    orchestrator = AgentOrchestrator(provider=provider)
+
+    result = await orchestrator.decide(
+        context=sample_customer_context,
+        policy_context=policy,
+    )
+
+    assert result.is_fallback is True
+    assert result.recommendation.recommended_action == RecoveryAction.WAIT_AND_RETRY
+    assert result.recommendation.recommended_action not in policy.prohibited_actions

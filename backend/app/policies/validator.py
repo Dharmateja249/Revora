@@ -80,23 +80,9 @@ class PolicyValidator:
         )
 
         # 3. Select effective fallback action deterministically
-        effective_action: RecoveryAction
-        if policy_context.mandatory_fallback_action is not None and (
-            policy_context.mandatory_fallback_action in policy_context.allowed_actions
-            and policy_context.mandatory_fallback_action
-            not in policy_context.prohibited_actions
-        ):
-            effective_action = policy_context.mandatory_fallback_action
-        elif policy_context.allowed_actions:
-            # Pick first permitted non-NO_ACTION if possible, else NO_ACTION
-            non_stop = [
-                a
-                for a in policy_context.allowed_actions
-                if a != RecoveryAction.NO_ACTION
-            ]
-            effective_action = non_stop[0] if non_stop else RecoveryAction.NO_ACTION
-        else:
-            # Strict fail-closed
+        try:
+            effective_action = self.select_fallback_action(policy_context)
+        except ValueError:
             effective_action = RecoveryAction.NO_ACTION
 
         explanation = (
@@ -117,4 +103,73 @@ class PolicyValidator:
                 "provider": policy_context.provider,
                 "original_candidate": candidate_action.value,
             },
+        )
+
+    def select_fallback_action(
+        self,
+        policy_context: RecoveryPolicyContext,
+    ) -> RecoveryAction:
+        """
+        Deterministically select a safe, policy-compliant fallback recovery action.
+
+        Evaluation order:
+        1. Explicit mandatory_fallback_action if present, allowed, and not prohibited.
+        2. Next highest-priority applicable rule's mandatory_fallback that is allowed and not prohibited.
+        3. First compliant non-NO_ACTION action from policy_context.allowed_actions.
+        4. RecoveryAction.NO_ACTION if allowed and not prohibited (fail-closed).
+        5. If allowed_actions is empty and NO_ACTION is not prohibited, fails closed to NO_ACTION.
+
+        Raises:
+            TypeError: If policy_context is not a RecoveryPolicyContext.
+            ValueError: If no policy-compliant fallback action can be established.
+        """
+        if not isinstance(policy_context, RecoveryPolicyContext):
+            raise TypeError(
+                f"Expected policy_context to be RecoveryPolicyContext, got {type(policy_context).__name__}"
+            )
+
+        # 1. Primary mandatory fallback action
+        if (
+            policy_context.mandatory_fallback_action is not None
+            and policy_context.mandatory_fallback_action
+            in policy_context.allowed_actions
+            and policy_context.mandatory_fallback_action
+            not in policy_context.prohibited_actions
+        ):
+            return policy_context.mandatory_fallback_action
+
+        # 2. Check applicable rules in priority order for a compliant mandatory fallback
+        for rule in policy_context.applicable_rules:
+            if (
+                rule.mandatory_fallback is not None
+                and rule.mandatory_fallback in policy_context.allowed_actions
+                and rule.mandatory_fallback not in policy_context.prohibited_actions
+            ):
+                return rule.mandatory_fallback
+
+        # 3. Filter compliant actions (allowed and not prohibited)
+        compliant_actions = [
+            a
+            for a in policy_context.allowed_actions
+            if a not in policy_context.prohibited_actions
+        ]
+
+        if compliant_actions:
+            # Prefer first compliant non-NO_ACTION action if permitted
+            non_stop = [a for a in compliant_actions if a != RecoveryAction.NO_ACTION]
+            if non_stop:
+                return non_stop[0]
+            if RecoveryAction.NO_ACTION in compliant_actions:
+                return RecoveryAction.NO_ACTION
+
+        # 4. If allowed_actions is empty, check if NO_ACTION is safe (fail-closed)
+        if (
+            not policy_context.allowed_actions
+            and RecoveryAction.NO_ACTION not in policy_context.prohibited_actions
+        ):
+            return RecoveryAction.NO_ACTION
+
+        # 5. Strict fail-closed: No policy-compliant fallback exists
+        raise ValueError(
+            "Cannot establish deterministic fallback: no policy-compliant recovery action available in policy context."
         )

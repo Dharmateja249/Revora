@@ -6,6 +6,7 @@ decision orchestrators for adaptive failed payment recovery.
 """
 
 from app.agent.context_builder import AgentContextBuilder
+from app.agent.factory import create_llm_provider
 from app.agent.openai_provider import (
     OpenAILLMProvider,
     RealLLMProvider,
@@ -19,6 +20,7 @@ from app.agent.provider import (
     LLMAuthenticationError,
     LLMConnectionError,
     LLMProvider,
+    LLMProviderConfigurationError,
     LLMProviderError,
     LLMRateLimitError,
     LLMResponseValidationError,
@@ -40,6 +42,7 @@ __all__ = [
     "LLMAuthenticationError",
     "LLMConnectionError",
     "LLMProvider",
+    "LLMProviderConfigurationError",
     "LLMProviderError",
     "LLMRateLimitError",
     "LLMRecoveryRecommendation",
@@ -49,4 +52,5 @@ __all__ = [
     "OpenAILLMProvider",
     "RealLLMProvider",
     "build_agent_messages",
+    "create_llm_provider",
 ]
