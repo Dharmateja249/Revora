@@ -10,7 +10,7 @@ import types
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import (
     BaseModel,
@@ -18,9 +18,11 @@ from pydantic import (
     Field,
     field_serializer,
     field_validator,
+    model_validator,
 )
 
 from app.context import CustomerRecoveryContext
+from app.decision_engine import RecoveryAction
 
 
 def utc_now() -> datetime:
@@ -86,12 +88,153 @@ class GroundTruthJudgment(BaseModel):
         return v
 
 
+class DecisionGroundTruth(BaseModel):
+    """
+    Immutable oracle describing the expected business decision and
+    policy envelope for an evaluation scenario.
+    """
+
+    model_config = ConfigDict(
+        frozen=True,
+        from_attributes=True,
+        validate_default=True,
+        arbitrary_types_allowed=False,
+    )
+
+    expected_action: RecoveryAction
+    acceptable_actions: tuple[RecoveryAction, ...] = Field(default_factory=tuple)
+    expected_policy_ids: tuple[str, ...] = Field(default_factory=tuple)
+    prohibited_actions: tuple[RecoveryAction, ...] = Field(default_factory=tuple)
+    rationale: str | None = None
+    expected_reasoning_factors: tuple[str, ...] = Field(default_factory=tuple)
+
+    @field_validator("expected_action", mode="before")
+    @classmethod
+    def _validate_expected_action(cls, v: Any) -> RecoveryAction:
+        if isinstance(v, RecoveryAction):
+            return v
+        if isinstance(v, str):
+            try:
+                return RecoveryAction(v.strip().lower())
+            except ValueError as exc:
+                raise ValueError(
+                    f"Invalid RecoveryAction: {v!r}. Expected one of {[a.value for a in RecoveryAction]}"
+                ) from exc
+        raise TypeError(
+            f"expected_action must be RecoveryAction or str, got {type(v).__name__}"
+        )
+
+    @field_validator("acceptable_actions", "prohibited_actions", mode="before")
+    @classmethod
+    def _normalize_actions_tuple(cls, v: Any) -> tuple[RecoveryAction, ...]:
+        if v is None:
+            return ()
+        if isinstance(v, (RecoveryAction, str)):
+            v = (v,)
+        if not isinstance(v, (list, tuple, set)):
+            raise TypeError(
+                f"Action collection must be a sequence, got {type(v).__name__}"
+            )
+
+        actions: list[RecoveryAction] = []
+        seen: set[RecoveryAction] = set()
+        for idx, item in enumerate(v):
+            action: RecoveryAction
+            if isinstance(item, RecoveryAction):
+                action = item
+            elif isinstance(item, str):
+                try:
+                    action = RecoveryAction(item.strip().lower())
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Invalid RecoveryAction at index {idx}: {item!r}"
+                    ) from exc
+            else:
+                raise TypeError(
+                    f"Item at index {idx} must be RecoveryAction or valid action string, got {type(item).__name__}"
+                )
+            if action not in seen:
+                seen.add(action)
+                actions.append(action)
+        return tuple(actions)
+
+    @field_validator("expected_policy_ids", "expected_reasoning_factors", mode="before")
+    @classmethod
+    def _normalize_string_tuples(cls, v: Any) -> tuple[str, ...]:
+        if v is None:
+            return ()
+        if isinstance(v, str):
+            v = (v,)
+        if not isinstance(v, (list, tuple, set)):
+            raise TypeError(f"Expected sequence of strings, got {type(v).__name__}")
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for idx, item in enumerate(v):
+            if not isinstance(item, str):
+                raise TypeError(
+                    f"Item at index {idx} must be str, got {type(item).__name__}"
+                )
+            cleaned = item.strip()
+            if cleaned and cleaned not in seen:
+                seen.add(cleaned)
+                normalized.append(cleaned)
+        return tuple(normalized)
+
+    @field_validator("rationale", mode="before")
+    @classmethod
+    def _normalize_rationale(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            raise TypeError(f"rationale must be a string, got {type(v).__name__}")
+        clean = v.strip()
+        return clean if clean else None
+
+    @model_validator(mode="after")
+    def _validate_decision_ground_truth_invariants(self) -> "DecisionGroundTruth":
+        # Invariant 1: Ensure expected_action is present in acceptable_actions
+        acceptable = list(self.acceptable_actions)
+        if self.expected_action not in acceptable:
+            acceptable.insert(0, self.expected_action)
+        acceptable_tuple = tuple(acceptable)
+
+        # Invariant 3: expected_action cannot be in prohibited_actions
+        if self.expected_action in self.prohibited_actions:
+            raise ValueError(
+                f"Contradictory ground truth: expected_action '{self.expected_action.value}' "
+                f"cannot be in prohibited_actions {[a.value for a in self.prohibited_actions]}."
+            )
+
+        # Invariant 4: acceptable_actions and prohibited_actions cannot overlap
+        overlap = set(acceptable_tuple).intersection(set(self.prohibited_actions))
+        if overlap:
+            raise ValueError(
+                f"Contradictory ground truth: acceptable_actions and prohibited_actions overlap "
+                f"on actions: {[a.value for a in sorted(overlap, key=lambda x: x.value)]}."
+            )
+
+        if acceptable_tuple != self.acceptable_actions:
+            object.__setattr__(self, "acceptable_actions", acceptable_tuple)
+
+        return self
+
+    @field_serializer("acceptable_actions", "prohibited_actions")
+    def _serialize_action_tuples(
+        self, v: tuple[RecoveryAction, ...], _info: Any
+    ) -> list[str]:
+        return [a.value for a in v]
+
+    @field_serializer("expected_policy_ids", "expected_reasoning_factors")
+    def _serialize_string_tuples(self, v: tuple[str, ...], _info: Any) -> list[str]:
+        return list(v)
+
+
 class EvaluationCase(BaseModel):
     """
-    Immutable representation of a single retrieval evaluation query scenario.
+    Immutable representation of a single retrieval and decision evaluation query scenario.
 
     Encapsulates the query CustomerRecoveryContext alongside its ground-truth
-    relevance judgments and scenario metadata.
+    relevance judgments, decision ground truth oracle, and scenario metadata.
     """
 
     model_config = ConfigDict(
@@ -104,6 +247,7 @@ class EvaluationCase(BaseModel):
     query_id: UUID
     context: CustomerRecoveryContext
     ground_truth: tuple[GroundTruthJudgment, ...] = Field(default_factory=tuple)
+    decision_ground_truth: DecisionGroundTruth | None = None
     description: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     metadata: Mapping[str, Any] = Field(default_factory=dict)
@@ -141,6 +285,19 @@ class EvaluationCase(BaseModel):
             judgments.append(judgment)
 
         return tuple(judgments)
+
+    @field_validator("decision_ground_truth", mode="before")
+    @classmethod
+    def _normalize_and_validate_decision_ground_truth(cls, v: Any) -> Any:
+        if v is None:
+            return None
+        if isinstance(v, DecisionGroundTruth):
+            return v
+        if isinstance(v, dict):
+            return DecisionGroundTruth(**v)
+        raise TypeError(
+            f"decision_ground_truth must be DecisionGroundTruth or dict, got {type(v).__name__}"
+        )
 
     @field_validator("metadata", mode="before")
     @classmethod
@@ -236,6 +393,228 @@ class RetrievalEvalResult(BaseModel):
 
     @field_serializer("metadata")
     def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> dict[str, Any]:
+        return _unfreeze_for_serialization(v)
+
+
+class DecisionEvalResult(BaseModel):
+    """
+    Immutable result of evaluating a recovery decision pipeline
+    against independent decision ground truth.
+    """
+
+    model_config = ConfigDict(
+        frozen=True,
+        from_attributes=True,
+        validate_default=True,
+        arbitrary_types_allowed=False,
+    )
+
+    query_id: UUID
+    pipeline_name: str
+    predicted_action: RecoveryAction
+    expected_action: RecoveryAction
+    acceptable_actions: tuple[RecoveryAction, ...] = Field(default_factory=tuple)
+    prohibited_actions: tuple[RecoveryAction, ...] = Field(default_factory=tuple)
+    expected_policy_ids: tuple[str, ...] = Field(default_factory=tuple)
+    is_exact_match: bool
+    is_acceptable_match: bool
+    confidence: float = Field(ge=0.0, le=1.0)
+    policy_overridden: bool = False
+    is_fallback: bool = False
+    fallback_reason: str | None = None
+    applied_policy_ids: tuple[str, ...] = Field(default_factory=tuple)
+    violated_policy_ids: tuple[str, ...] = Field(default_factory=tuple)
+    referenced_case_ids: tuple[str, ...] = Field(default_factory=tuple)
+    key_factors: tuple[str, ...] = Field(default_factory=tuple)
+    latency_ms: float = Field(default=0.0, ge=0.0)
+    error: str | None = None
+    metadata: Mapping[str, Any] = Field(default_factory=dict)
+
+    @field_validator("pipeline_name", mode="before")
+    @classmethod
+    def _validate_pipeline_name(cls, v: Any) -> str:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError(f"pipeline_name must be a non-empty string, got: {v!r}")
+        return v.strip()
+
+    @field_validator("predicted_action", "expected_action", mode="before")
+    @classmethod
+    def _validate_action(cls, v: Any) -> RecoveryAction:
+        if isinstance(v, RecoveryAction):
+            return v
+        if isinstance(v, str):
+            try:
+                return RecoveryAction(v.strip().lower())
+            except ValueError as exc:
+                raise ValueError(
+                    f"Invalid RecoveryAction: {v!r}. Expected one of {[a.value for a in RecoveryAction]}"
+                ) from exc
+        raise TypeError(f"Action must be RecoveryAction or str, got {type(v).__name__}")
+
+    @field_validator("acceptable_actions", "prohibited_actions", mode="before")
+    @classmethod
+    def _normalize_action_tuple(cls, v: Any) -> tuple[RecoveryAction, ...]:
+        if v is None:
+            return ()
+        if isinstance(v, (RecoveryAction, str)):
+            v = (v,)
+        if not isinstance(v, (list, tuple, set)):
+            raise TypeError(f"Expected sequence of actions, got {type(v).__name__}")
+        actions: list[RecoveryAction] = []
+        for idx, item in enumerate(v):
+            if isinstance(item, RecoveryAction):
+                actions.append(item)
+            elif isinstance(item, str):
+                try:
+                    actions.append(RecoveryAction(item.strip().lower()))
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Invalid RecoveryAction at index {idx}: {item!r}"
+                    ) from exc
+            else:
+                raise TypeError(
+                    f"Item at index {idx} must be RecoveryAction or str, got {type(item).__name__}"
+                )
+        return tuple(actions)
+
+    @field_validator(
+        "expected_policy_ids",
+        "applied_policy_ids",
+        "violated_policy_ids",
+        "referenced_case_ids",
+        "key_factors",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_string_tuples(cls, v: Any) -> tuple[str, ...]:
+        if v is None:
+            return ()
+        if isinstance(v, str):
+            v = (v,)
+        if not isinstance(v, (list, tuple, set)):
+            raise TypeError(f"Expected sequence of strings, got {type(v).__name__}")
+        return tuple(str(x).strip() for x in v if str(x).strip())
+
+    @field_validator("fallback_reason", "error", mode="before")
+    @classmethod
+    def _normalize_optional_strings(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            raise TypeError(f"Expected string, got {type(v).__name__}")
+        clean = v.strip()
+        return clean if clean else None
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def _normalize_metadata(cls, v: Any) -> Any:
+        return v if v is not None else {}
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _freeze_metadata(cls, v: Any) -> Mapping[str, Any]:
+        return _freeze_nested(v) if v is not None else types.MappingProxyType({})
+
+    @field_serializer("acceptable_actions", "prohibited_actions")
+    def _serialize_action_tuples(
+        self, v: tuple[RecoveryAction, ...], _info: Any
+    ) -> list[str]:
+        return [a.value for a in v]
+
+    @field_serializer(
+        "expected_policy_ids",
+        "applied_policy_ids",
+        "violated_policy_ids",
+        "referenced_case_ids",
+        "key_factors",
+    )
+    def _serialize_string_tuples(self, v: tuple[str, ...], _info: Any) -> list[str]:
+        return list(v)
+
+    @field_serializer("metadata")
+    def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> dict[str, Any]:
+        return _unfreeze_for_serialization(v)
+
+
+class DecisionBenchmarkReport(BaseModel):
+    """
+    Immutable aggregate benchmark report capturing the overall decision quality,
+    safety compliance, policy adherence, and performance of a decision pipeline.
+    """
+
+    model_config = ConfigDict(
+        frozen=True,
+        from_attributes=True,
+        validate_default=True,
+        arbitrary_types_allowed=False,
+    )
+
+    pipeline_name: str
+    dataset_name: str
+    num_queries: int = Field(ge=0)
+    results: tuple[DecisionEvalResult, ...] = Field(default_factory=tuple)
+    aggregate_metrics: Mapping[str, float] = Field(default_factory=dict)
+    evaluated_at: datetime = Field(default_factory=utc_now)
+    evaluation_version: str = "1.0"
+    report_id: str = Field(default_factory=lambda: f"decision_{uuid4().hex[:12]}")
+    metadata: Mapping[str, Any] = Field(default_factory=dict)
+
+    @field_validator("pipeline_name", mode="before")
+    @classmethod
+    def _validate_pipeline_name(cls, v: Any) -> str:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError(f"pipeline_name must be a non-empty string, got: {v!r}")
+        return v.strip()
+
+    @field_validator("dataset_name", "evaluation_version", mode="before")
+    @classmethod
+    def _validate_non_empty_strings(cls, v: Any) -> str:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError(f"String fields must be non-empty strings, got: {v!r}")
+        return v.strip()
+
+    @field_validator("num_queries", mode="before")
+    @classmethod
+    def _validate_num_queries(cls, v: Any) -> int:
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise ValueError(f"num_queries must be an integer, got: {v!r}")  # noqa: TRY004
+        if v < 0:
+            raise ValueError(f"num_queries cannot be negative, got: {v}")
+        return v
+
+    @field_validator("results", mode="before")
+    @classmethod
+    def _normalize_results(cls, v: Any) -> tuple[DecisionEvalResult, ...]:
+        if v is None:
+            return ()
+        if not isinstance(v, (list, tuple, set)):
+            raise TypeError(
+                f"results must be a sequence of DecisionEvalResult, got {type(v).__name__}"
+            )
+        res_list: list[DecisionEvalResult] = []
+        for idx, item in enumerate(v):
+            if isinstance(item, DecisionEvalResult):
+                res_list.append(item)
+            elif isinstance(item, dict):
+                res_list.append(DecisionEvalResult(**item))
+            else:
+                raise TypeError(
+                    f"Item at index {idx} in results must be DecisionEvalResult, got {type(item).__name__}"
+                )
+        return tuple(res_list)
+
+    @field_validator("aggregate_metrics", "metadata", mode="before")
+    @classmethod
+    def _normalize_mappings(cls, v: Any) -> Any:
+        return v if v is not None else {}
+
+    @field_validator("aggregate_metrics", "metadata", mode="after")
+    @classmethod
+    def _freeze_mappings(cls, v: Any) -> Mapping[str, Any]:
+        return _freeze_nested(v) if v is not None else types.MappingProxyType({})
+
+    @field_serializer("aggregate_metrics", "metadata")
+    def _serialize_mappings(self, v: Mapping[str, Any], _info: Any) -> dict[str, Any]:
         return _unfreeze_for_serialization(v)
 
 

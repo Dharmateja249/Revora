@@ -9,6 +9,7 @@ Independent of production retrieval algorithms and scoring formulas.
 """
 
 from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID
 
 from app.context import (
@@ -19,7 +20,12 @@ from app.context import (
     PaymentContext,
     RecoveryOpportunityContext,
 )
-from app.evaluation.schemas import EvaluationCase, GroundTruthJudgment
+from app.decision_engine import RecoveryAction
+from app.evaluation.schemas import (
+    DecisionGroundTruth,
+    EvaluationCase,
+    GroundTruthJudgment,
+)
 from app.historical_retrieval import HistoricalCase
 
 
@@ -2537,10 +2543,25 @@ def _build_evaluation_cases() -> tuple[EvaluationCase, ...]:
             retrieved_at=T_QUERY,
         )
 
+        dt_spec = DECISION_GROUND_TRUTH_SPECS.get(scen_id)
+        decision_gt: DecisionGroundTruth | None = None
+        if dt_spec:
+            decision_gt = DecisionGroundTruth(
+                expected_action=dt_spec["expected_action"],
+                acceptable_actions=dt_spec["acceptable_actions"],
+                expected_policy_ids=dt_spec["expected_policy_ids"],
+                prohibited_actions=dt_spec["prohibited_actions"],
+                rationale=dt_spec.get("rationale", description),
+                expected_reasoning_factors=dt_spec.get(
+                    "expected_reasoning_factors", ()
+                ),
+            )
+
         eval_case = EvaluationCase(
             query_id=query_id,
             context=context,
             ground_truth=tuple(judgments),
+            decision_ground_truth=decision_gt,
             description=description,
             created_at=T_QUERY,
             metadata={
@@ -2555,6 +2576,617 @@ def _build_evaluation_cases() -> tuple[EvaluationCase, ...]:
         cases.append(eval_case)
 
     return tuple(cases)
+
+
+# Authoritative Decision Ground Truth Specifications for all 50 scenarios
+DECISION_GROUND_TRUTH_SPECS: dict[int, dict[str, Any]] = {
+    # Group 1: Transient Technical Failures on UPI (Scenarios 1-6)
+    1: {
+        "expected_action": RecoveryAction.RETRY_PAYMENT,
+        "acceptable_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "UPI Bank Timeout - Prior successful retry precedent",
+        "expected_reasoning_factors": ("transient_timeout", "prior_retry_success"),
+    },
+    2: {
+        "expected_action": RecoveryAction.WAIT_AND_RETRY,
+        "acceptable_actions": (
+            RecoveryAction.WAIT_AND_RETRY,
+            RecoveryAction.RETRY_PAYMENT,
+        ),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "UPI Bank Server Down - Prior wait-and-retry recovery",
+        "expected_reasoning_factors": ("bank_server_down", "wait_and_retry"),
+    },
+    3: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.RETRY_PAYMENT,
+        ),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "UPI Gateway Timeout - Successful payment link resolution",
+        "expected_reasoning_factors": ("gateway_timeout", "payment_link"),
+    },
+    4: {
+        "expected_action": RecoveryAction.RETRY_PAYMENT,
+        "acceptable_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "UPI Micro-transaction Network Timeout - Rapid retry success",
+        "expected_reasoning_factors": (
+            "network_timeout",
+            "micro_payment",
+            "retry_success",
+        ),
+    },
+    5: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.RETRY_PAYMENT,
+        ),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "UPI Connection Reset - Prior switch to alternate payment link",
+        "expected_reasoning_factors": ("connection_reset", "payment_link"),
+    },
+    6: {
+        "expected_action": RecoveryAction.WAIT_AND_RETRY,
+        "acceptable_actions": (RecoveryAction.WAIT_AND_RETRY,),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "UPI Service Unavailable - High amount with wait-and-retry",
+        "expected_reasoning_factors": ("service_unavailable", "wait_and_retry"),
+    },
+    # Group 2: Transient Technical Failures on Cards, NetBanking, and Wallets (Scenarios 7-12)
+    7: {
+        "expected_action": RecoveryAction.RETRY_PAYMENT,
+        "acceptable_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "Card Bank Timeout - Card issuer timeout with retry success",
+        "expected_reasoning_factors": ("bank_timeout", "card_rail", "retry_success"),
+    },
+    8: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.WAIT_AND_RETRY,
+        ),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "Card Gateway System Error - Recovered via payment link",
+        "expected_reasoning_factors": ("system_error", "payment_link"),
+    },
+    9: {
+        "expected_action": RecoveryAction.RETRY_PAYMENT,
+        "acceptable_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "Card Gateway 500 Error - Automatic retry success",
+        "expected_reasoning_factors": ("internal_server_error", "automatic_retry"),
+    },
+    10: {
+        "expected_action": RecoveryAction.RETRY_PAYMENT,
+        "acceptable_actions": (
+            RecoveryAction.RETRY_PAYMENT,
+            RecoveryAction.WAIT_AND_RETRY,
+        ),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "NetBanking High Value Timeout - Retry resolution",
+        "expected_reasoning_factors": (
+            "bank_timeout",
+            "netbanking_rail",
+            "retry_resolution",
+        ),
+    },
+    11: {
+        "expected_action": RecoveryAction.WAIT_AND_RETRY,
+        "acceptable_actions": (
+            RecoveryAction.WAIT_AND_RETRY,
+            RecoveryAction.PAYMENT_LINK,
+        ),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "NetBanking Gateway Unavailable - Wait and retry resolution",
+        "expected_reasoning_factors": ("service_unavailable", "wait_and_retry"),
+    },
+    12: {
+        "expected_action": RecoveryAction.RETRY_PAYMENT,
+        "acceptable_actions": (
+            RecoveryAction.RETRY_PAYMENT,
+            RecoveryAction.WAIT_AND_RETRY,
+        ),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "Wallet Server Down - Prior retry success",
+        "expected_reasoning_factors": (
+            "bank_server_down",
+            "wallet_rail",
+            "retry_success",
+        ),
+    },
+    # Group 3: Insufficient Funds & Balance Issues (Scenarios 13-24)
+    13: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        "expected_policy_ids": ("RZP_INSUFFICIENT_FUNDS_SOFT_DECLINE",),
+        "prohibited_actions": (),
+        "rationale": "Card Insufficient Funds - Payment link collection success",
+        "expected_reasoning_factors": ("insufficient_funds", "payment_link"),
+    },
+    14: {
+        "expected_action": RecoveryAction.CHANGE_PAYMENT_METHOD,
+        "acceptable_actions": (
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+            RecoveryAction.PAYMENT_LINK,
+        ),
+        "expected_policy_ids": ("RZP_INSUFFICIENT_FUNDS_SOFT_DECLINE",),
+        "prohibited_actions": (),
+        "rationale": "Card Low Balance - Switch to alternate card success",
+        "expected_reasoning_factors": ("low_balance", "change_payment_method"),
+    },
+    15: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        "expected_policy_ids": ("RZP_INSUFFICIENT_FUNDS_SOFT_DECLINE",),
+        "prohibited_actions": (),
+        "rationale": "Card Balance Insufficient - Payment link resolution",
+        "expected_reasoning_factors": ("balance_insufficient", "payment_link"),
+    },
+    16: {
+        "expected_action": RecoveryAction.CHANGE_PAYMENT_METHOD,
+        "acceptable_actions": (
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+            RecoveryAction.PAYMENT_LINK,
+        ),
+        "expected_policy_ids": ("RZP_INSUFFICIENT_FUNDS_SOFT_DECLINE",),
+        "prohibited_actions": (),
+        "rationale": "Card Limit Exceeded - Split/change payment method success",
+        "expected_reasoning_factors": ("limit_exceeded", "change_payment_method"),
+    },
+    17: {
+        "expected_action": RecoveryAction.WAIT_AND_RETRY,
+        "acceptable_actions": (
+            RecoveryAction.WAIT_AND_RETRY,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+            RecoveryAction.PAYMENT_LINK,
+        ),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "Card Daily Limit Exceeded - Wait and retry next day success",
+        "expected_reasoning_factors": ("daily_limit_exceeded", "wait_and_retry"),
+    },
+    18: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        "expected_policy_ids": ("RZP_INSUFFICIENT_FUNDS_SOFT_DECLINE",),
+        "prohibited_actions": (),
+        "rationale": "Card Exceeds Limit - Payment link resolution",
+        "expected_reasoning_factors": ("exceeds_limit", "payment_link"),
+    },
+    19: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        "expected_policy_ids": ("RZP_INSUFFICIENT_FUNDS_SOFT_DECLINE",),
+        "prohibited_actions": (),
+        "rationale": "UPI Insufficient Funds - Payment link to alternate bank",
+        "expected_reasoning_factors": (
+            "insufficient_funds",
+            "upi_rail",
+            "payment_link",
+        ),
+    },
+    20: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        "expected_policy_ids": ("RZP_INSUFFICIENT_FUNDS_SOFT_DECLINE",),
+        "prohibited_actions": (),
+        "rationale": "UPI Low Balance - Payment link recovery",
+        "expected_reasoning_factors": ("low_balance", "payment_link"),
+    },
+    21: {
+        "expected_action": RecoveryAction.CHANGE_PAYMENT_METHOD,
+        "acceptable_actions": (
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+            RecoveryAction.PAYMENT_LINK,
+        ),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "UPI Daily Limit Exceeded - Change to NetBanking resolution",
+        "expected_reasoning_factors": ("daily_limit_exceeded", "change_payment_method"),
+    },
+    22: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        "expected_policy_ids": ("RZP_INSUFFICIENT_FUNDS_SOFT_DECLINE",),
+        "prohibited_actions": (),
+        "rationale": "NetBanking Insufficient Funds - Payment link recovery",
+        "expected_reasoning_factors": (
+            "insufficient_funds",
+            "netbanking_rail",
+            "payment_link",
+        ),
+    },
+    23: {
+        "expected_action": RecoveryAction.CHANGE_PAYMENT_METHOD,
+        "acceptable_actions": (
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+            RecoveryAction.PAYMENT_LINK,
+        ),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "NetBanking Limit Exceeded - Change payment method resolution",
+        "expected_reasoning_factors": ("limit_exceeded", "change_payment_method"),
+    },
+    24: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        "expected_policy_ids": ("RZP_INSUFFICIENT_FUNDS_SOFT_DECLINE",),
+        "prohibited_actions": (),
+        "rationale": "Wallet Insufficient Balance - Payment link recovery",
+        "expected_reasoning_factors": (
+            "insufficient_funds",
+            "wallet_rail",
+            "payment_link",
+        ),
+    },
+    # Group 4: Customer Interaction & 2FA Failures (Scenarios 25-32)
+    25: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (RecoveryAction.PAYMENT_LINK,),
+        "expected_policy_ids": ("RZP_CUSTOMER_AUTH_2FA_REQUIRED",),
+        "prohibited_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "rationale": "Card OTP Expired - Payment link sent for fresh OTP flow",
+        "expected_reasoning_factors": (
+            "otp_expired",
+            "2fa_required",
+            "retry_prohibited",
+        ),
+    },
+    26: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (RecoveryAction.PAYMENT_LINK,),
+        "expected_policy_ids": ("RZP_CUSTOMER_AUTH_2FA_REQUIRED",),
+        "prohibited_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "rationale": "Card OTP Timeout - Retry with payment link",
+        "expected_reasoning_factors": ("otp_timeout", "2fa_required", "payment_link"),
+    },
+    27: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        "expected_policy_ids": ("RZP_CUSTOMER_AUTH_2FA_REQUIRED",),
+        "prohibited_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "rationale": "Card 3DS Authentication Failed - Payment link re-trigger",
+        "expected_reasoning_factors": (
+            "3ds_failed",
+            "customer_auth_required",
+            "payment_link",
+        ),
+    },
+    28: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        "expected_policy_ids": ("RZP_CUSTOMER_AUTH_2FA_REQUIRED",),
+        "prohibited_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "rationale": "Card Authentication Failed - Direct interactive recovery required",
+        "expected_reasoning_factors": (
+            "authentication_failed",
+            "customer_auth_required",
+        ),
+    },
+    29: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        "expected_policy_ids": ("RZP_CUSTOMER_AUTH_2FA_REQUIRED",),
+        "prohibited_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "rationale": "UPI Incorrect PIN - Payment link for re-entry",
+        "expected_reasoning_factors": (
+            "pin_incorrect",
+            "user_reentry_required",
+            "payment_link",
+        ),
+    },
+    30: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (RecoveryAction.PAYMENT_LINK,),
+        "expected_policy_ids": ("RZP_CUSTOMER_AUTH_2FA_REQUIRED",),
+        "prohibited_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "rationale": "UPI User Cancelled - Follow-up payment link recovery",
+        "expected_reasoning_factors": ("user_cancelled", "payment_link_followup"),
+    },
+    31: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (RecoveryAction.PAYMENT_LINK,),
+        "expected_policy_ids": ("RZP_CUSTOMER_AUTH_2FA_REQUIRED",),
+        "prohibited_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "rationale": "UPI Customer Cancelled - Reminder link recovery",
+        "expected_reasoning_factors": ("customer_cancelled", "payment_link_reminder"),
+    },
+    32: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        "expected_policy_ids": ("RZP_CUSTOMER_AUTH_2FA_REQUIRED",),
+        "prohibited_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "rationale": "Card Declined by User - Payment link conversion",
+        "expected_reasoning_factors": ("declined_by_user", "payment_link_conversion"),
+    },
+    # Group 5: Permanent Account & Card Failures (Scenarios 33-40)
+    33: {
+        "expected_action": RecoveryAction.CHANGE_PAYMENT_METHOD,
+        "acceptable_actions": (
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+            RecoveryAction.PAYMENT_LINK,
+        ),
+        "expected_policy_ids": ("RZP_PERMANENT_CREDENTIAL_DECLINE",),
+        "prohibited_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "rationale": "Card Expired - Change payment method resolution",
+        "expected_reasoning_factors": (
+            "card_expired",
+            "permanent_failure",
+            "retry_prohibited",
+        ),
+    },
+    34: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        "expected_policy_ids": ("RZP_PERMANENT_CREDENTIAL_DECLINE",),
+        "prohibited_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "rationale": "Expired Card - Payment link with new card entry",
+        "expected_reasoning_factors": (
+            "expired_card",
+            "new_card_entry",
+            "payment_link",
+        ),
+    },
+    35: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        "expected_policy_ids": ("RZP_PERMANENT_CREDENTIAL_DECLINE",),
+        "prohibited_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "rationale": "Card Invalid CVV - Payment link for CVV correction",
+        "expected_reasoning_factors": ("invalid_cvv", "cvv_correction", "payment_link"),
+    },
+    36: {
+        "expected_action": RecoveryAction.CHANGE_PAYMENT_METHOD,
+        "acceptable_actions": (
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+            RecoveryAction.PAYMENT_LINK,
+        ),
+        "expected_policy_ids": ("RZP_PERMANENT_CREDENTIAL_DECLINE",),
+        "prohibited_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "rationale": "Card Invalid Number - Change payment method resolution",
+        "expected_reasoning_factors": ("invalid_card_number", "change_payment_method"),
+    },
+    37: {
+        "expected_action": RecoveryAction.CHANGE_PAYMENT_METHOD,
+        "acceptable_actions": (
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+            RecoveryAction.PAYMENT_LINK,
+        ),
+        "expected_policy_ids": ("RZP_PERMANENT_CREDENTIAL_DECLINE",),
+        "prohibited_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "rationale": "Card Blocked Account - Change payment method to UPI",
+        "expected_reasoning_factors": ("blocked_account", "switch_to_upi"),
+    },
+    38: {
+        "expected_action": RecoveryAction.CHANGE_PAYMENT_METHOD,
+        "acceptable_actions": (
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+            RecoveryAction.PAYMENT_LINK,
+        ),
+        "expected_policy_ids": ("RZP_PERMANENT_CREDENTIAL_DECLINE",),
+        "prohibited_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "rationale": "Card Do Not Honor - Change payment method resolution",
+        "expected_reasoning_factors": (
+            "do_not_honor",
+            "issuer_hard_decline",
+            "change_method",
+        ),
+    },
+    39: {
+        "expected_action": RecoveryAction.CHANGE_PAYMENT_METHOD,
+        "acceptable_actions": (
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+            RecoveryAction.PAYMENT_LINK,
+        ),
+        "expected_policy_ids": ("RZP_PERMANENT_CREDENTIAL_DECLINE",),
+        "prohibited_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "rationale": "NetBanking Account Closed - Switch to Card resolution",
+        "expected_reasoning_factors": ("account_closed", "switch_to_card"),
+    },
+    40: {
+        "expected_action": RecoveryAction.CHANGE_PAYMENT_METHOD,
+        "acceptable_actions": (
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+            RecoveryAction.PAYMENT_LINK,
+        ),
+        "expected_policy_ids": ("RZP_PERMANENT_CREDENTIAL_DECLINE",),
+        "prohibited_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "rationale": "NetBanking Invalid Account - Change to UPI recovery",
+        "expected_reasoning_factors": ("invalid_account", "switch_to_upi"),
+    },
+    # Group 6: Edge Cases & High-Value Scenarios (Scenarios 41-50)
+    41: {
+        "expected_action": RecoveryAction.RETRY_PAYMENT,
+        "acceptable_actions": (
+            RecoveryAction.RETRY_PAYMENT,
+            RecoveryAction.WAIT_AND_RETRY,
+        ),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "Enterprise High Value Card Timeout - Careful retry resolution",
+        "expected_reasoning_factors": (
+            "bank_timeout",
+            "enterprise_card",
+            "retry_resolution",
+        ),
+    },
+    42: {
+        "expected_action": RecoveryAction.RETRY_PAYMENT,
+        "acceptable_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "UPI Micro Payment - Immediate retry precedent",
+        "expected_reasoning_factors": (
+            "bank_timeout",
+            "micro_payment",
+            "immediate_retry",
+        ),
+    },
+    43: {
+        "expected_action": RecoveryAction.RETRY_PAYMENT,
+        "acceptable_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "USD Multi-Currency Card Timeout - International retry success",
+        "expected_reasoning_factors": (
+            "bank_timeout",
+            "cross_currency",
+            "retry_success",
+        ),
+    },
+    44: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        "expected_policy_ids": ("RZP_INSUFFICIENT_FUNDS_SOFT_DECLINE",),
+        "prohibited_actions": (),
+        "rationale": "USD Card Insufficient Funds - Payment link recovery",
+        "expected_reasoning_factors": (
+            "insufficient_funds",
+            "cross_currency",
+            "payment_link",
+        ),
+    },
+    45: {
+        "expected_action": RecoveryAction.RETRY_PAYMENT,
+        "acceptable_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "Exact Timestamp Boundary Case - Transient retry recovery",
+        "expected_reasoning_factors": (
+            "bank_timeout",
+            "timestamp_boundary",
+            "retry_success",
+        ),
+    },
+    46: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ),
+        "expected_policy_ids": ("RZP_INSUFFICIENT_FUNDS_SOFT_DECLINE",),
+        "prohibited_actions": (),
+        "rationale": "Recent vs Old Recency Comparison Scenario - Payment link recovery",
+        "expected_reasoning_factors": (
+            "insufficient_funds",
+            "recency_weighting",
+            "payment_link",
+        ),
+    },
+    47: {
+        "expected_action": RecoveryAction.PAYMENT_LINK,
+        "acceptable_actions": (RecoveryAction.PAYMENT_LINK,),
+        "expected_policy_ids": ("RZP_CUSTOMER_AUTH_2FA_REQUIRED",),
+        "prohibited_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "rationale": "Multiple Candidate Density Scenario - 2FA timeout payment link",
+        "expected_reasoning_factors": (
+            "otp_timeout",
+            "candidate_density",
+            "2fa_required",
+        ),
+    },
+    48: {
+        "expected_action": RecoveryAction.RETRY_PAYMENT,
+        "acceptable_actions": (RecoveryAction.RETRY_PAYMENT,),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "Wallet Network Timeout - Retry resolution",
+        "expected_reasoning_factors": (
+            "network_timeout",
+            "wallet_rail",
+            "retry_resolution",
+        ),
+    },
+    49: {
+        "expected_action": RecoveryAction.WAIT_AND_RETRY,
+        "acceptable_actions": (
+            RecoveryAction.WAIT_AND_RETRY,
+            RecoveryAction.PAYMENT_LINK,
+        ),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "NetBanking System Error - Wait and retry resolution",
+        "expected_reasoning_factors": (
+            "system_error",
+            "netbanking_rail",
+            "wait_and_retry",
+        ),
+    },
+    50: {
+        "expected_action": RecoveryAction.RETRY_PAYMENT,
+        "acceptable_actions": (
+            RecoveryAction.RETRY_PAYMENT,
+            RecoveryAction.WAIT_AND_RETRY,
+        ),
+        "expected_policy_ids": (),
+        "prohibited_actions": (),
+        "rationale": "Cold-Start Customer Scenario - Fallback to deterministic retry",
+        "expected_reasoning_factors": (
+            "bank_timeout",
+            "cold_start",
+            "deterministic_retry",
+        ),
+    },
+}
 
 
 # Global deterministic dataset instance
