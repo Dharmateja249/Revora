@@ -206,6 +206,14 @@ def run_decision_cli(
     Returns:
         Exit code (0 for success, 1 for error).
     """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, ValueError, OSError):
+                continue
+
     parser = argparse.ArgumentParser(
         prog="revora-decision-benchmark",
         description="Revora Decision Benchmark & Pipeline Quality Evaluation CLI",
@@ -229,12 +237,13 @@ def run_decision_cli(
         action="store_true",
         help="Disable automatic artifact file persistence.",
     )
-    parser.add_argument(
+    format_group = parser.add_mutually_exclusive_group()
+    format_group.add_argument(
         "--json",
         action="store_true",
         help="Print machine-readable JSON benchmark report to stdout.",
     )
-    parser.add_argument(
+    format_group.add_argument(
         "--markdown",
         action="store_true",
         help="Print human-readable Markdown report to stdout.",
@@ -308,11 +317,39 @@ def run_decision_cli(
         return 1
 
     try:
+        # 1. Resolve / read previous baseline first if requested
+        pre_resolved_baselines: dict[str, DecisionBenchmarkReport] = {}
+        if parsed.compare_baseline:
+            from app.evaluation.decision_persistence import (
+                load_decision_report,
+                load_latest_decision_report,
+            )
+
+            pipe_names = (
+                parsed.pipelines
+                if parsed.pipelines
+                else ["deterministic_baseline", "deterministic_rag"]
+            )
+            for p_name in pipe_names:
+                if parsed.compare_baseline == "latest":
+                    b_rep = load_latest_decision_report(
+                        pipeline_name=p_name,
+                        directory=parsed.output_dir,
+                    )
+                else:
+                    b_rep = load_decision_report(
+                        parsed.compare_baseline,
+                        directory=parsed.output_dir,
+                    )
+                if b_rep is not None:
+                    pre_resolved_baselines[p_name] = b_rep
+
+        # 2. Run / create candidate benchmark without persisting prematurely
         reports = run_decision_benchmark(
             evaluation_cases=evaluation_cases,
             pipelines=parsed.pipelines,
             output_dir=parsed.output_dir,
-            save_artifacts=not parsed.no_save,
+            save_artifacts=False,
         )
 
         if not parsed.quiet and not parsed.json and not parsed.markdown:
@@ -328,14 +365,34 @@ def run_decision_cli(
             else:
                 print(generate_decision_comparison_markdown(reports))
 
-        # Check baseline comparison if requested
+        # 3. Compare candidate against retained baseline
+        has_regression = False
         if parsed.compare_baseline:
             from app.evaluation.decision_persistence import (
                 compare_decision_with_baseline,
+                load_decision_report,
+                load_latest_decision_report,
             )
 
-            has_regression = False
             for rep in reports.values():
+                b_rep = pre_resolved_baselines.get(rep.pipeline_name)
+                if b_rep is None:
+                    if parsed.compare_baseline == "latest":
+                        b_rep = load_latest_decision_report(
+                            pipeline_name=rep.pipeline_name,
+                            directory=parsed.output_dir,
+                            exclude_report_id=rep.report_id,
+                        )
+                    else:
+                        b_rep = load_decision_report(
+                            parsed.compare_baseline,
+                            directory=parsed.output_dir,
+                        )
+                if b_rep is None:
+                    raise FileNotFoundError(
+                        f"No baseline report found on disk for pipeline '{rep.pipeline_name}'."
+                    )
+
                 comp_res = compare_decision_with_baseline(
                     current_report=rep,
                     baseline_id_or_path=(
@@ -357,10 +414,8 @@ def run_decision_cli(
                 if not comp_res.passed:
                     has_regression = True
 
-            if parsed.assert_no_regressions and has_regression:
-                return 1
-
-        # Check if quality gate enforcement requested
+        # 4. Evaluate quality gate assertions
+        quality_gate_failed = False
         quality_gate_requested = bool(
             parsed.assert_quality_gate
             or parsed.min_exact_match is not None
@@ -391,16 +446,41 @@ def run_decision_cli(
                 max_mean_latency_ms=parsed.max_latency,
             )
 
-            all_passed = True
             for rep in reports.values():
                 gate_res = evaluate_decision_quality_gate(rep, thresholds=thresholds)
                 if not parsed.quiet:
                     print("\n" + format_quality_gate_terminal_summary(gate_res))
                 if not gate_res.passed:
-                    all_passed = False
+                    quality_gate_failed = True
 
-            if not all_passed:
-                return 1
+        # 5. Persist / publish candidate and latest appropriately
+        if not parsed.no_save:
+            from app.evaluation.decision_persistence import (
+                get_decision_evaluation_directory,
+            )
+            from app.evaluation.decision_reporting import (
+                save_decision_benchmark_artifacts,
+            )
+
+            target_dir = get_decision_evaluation_directory(parsed.output_dir)
+            for rep in reports.values():
+                save_decision_benchmark_artifacts(
+                    report=rep,
+                    output_dir=target_dir,
+                )
+
+            if len(reports) > 1:
+                save_decision_benchmark_artifacts(
+                    report=reports,
+                    output_dir=target_dir,
+                    base_filename="decision_pipeline_comparison",
+                )
+
+        if parsed.assert_no_regressions and has_regression:
+            return 1
+
+        if quality_gate_failed:
+            return 1
 
         return 0
     except Exception as exc:  # noqa: BLE001

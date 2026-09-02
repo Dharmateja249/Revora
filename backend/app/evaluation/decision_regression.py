@@ -294,6 +294,11 @@ def compare_decision_runs(
     Returns:
         DecisionRegressionComparisonResult containing deltas and violations.
     """
+    if current_report.report_id == baseline_report.report_id:
+        raise ValueError(
+            f"Candidate benchmark report '{current_report.report_id}' cannot be compared against itself as baseline."
+        )
+
     t = thresholds or DecisionQualityThresholds()
     curr_m = dict(current_report.aggregate_metrics)
     base_m = dict(baseline_report.aggregate_metrics)

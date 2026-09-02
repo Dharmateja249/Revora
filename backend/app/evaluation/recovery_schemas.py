@@ -8,8 +8,9 @@ outcomes, and aggregate recovery benchmark financial reports.
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.context import CustomerRecoveryContext, utc_now
 from app.decision_engine import RecoveryAction
@@ -49,6 +50,28 @@ class RecoveryScenario(BaseModel):
     effective_policy_ids: tuple[str, ...] = Field(default_factory=tuple)
     success_action_rates: Mapping[str, float] = Field(default_factory=dict)
     description: str = ""
+
+    @field_validator("cost_per_action")
+    @classmethod
+    def validate_cost_per_action(cls, v: Mapping[str, float]) -> Mapping[str, float]:
+        for action, cost in v.items():
+            if cost < 0.0:
+                raise ValueError(
+                    f"Action cost for '{action}' cannot be negative, got {cost}"
+                )
+        return v
+
+    @field_validator("success_action_rates")
+    @classmethod
+    def validate_success_action_rates(
+        cls, v: Mapping[str, float]
+    ) -> Mapping[str, float]:
+        for action, rate in v.items():
+            if rate < 0.0 or rate > 1.0:
+                raise ValueError(
+                    f"Success rate for '{action}' must be in range [0.0, 1.0], got {rate}"
+                )
+        return v
 
 
 class SimulatedRecoveryOutcome(BaseModel):
@@ -105,4 +128,5 @@ class RecoveryBenchmarkReport(BaseModel):
     outcomes: tuple[SimulatedRecoveryOutcome, ...] = Field(default_factory=tuple)
     evaluated_at: datetime = Field(default_factory=utc_now)
     evaluation_version: str = "1.0"
+    report_id: str = Field(default_factory=lambda: f"recovery_{uuid4().hex[:12]}")
     metadata: Mapping[str, Any] = Field(default_factory=dict)

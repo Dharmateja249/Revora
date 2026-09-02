@@ -137,17 +137,51 @@ class EvaluationAgentLLMProvider(LLMProvider):
                 reasoning = "Soft failure with positive retry precedent."
                 key_factors.append("soft_recoverable_decline")
                 confidence = 0.89
-            elif RecoveryAction.PAYMENT_LINK.value in allowed_actions:
+            elif (
+                RecoveryAction.PAYMENT_LINK.value in allowed_actions
+                and RecoveryAction.PAYMENT_LINK.value not in prohibited_actions
+            ):
                 chosen_action = RecoveryAction.PAYMENT_LINK
                 reasoning = "Fallback payment link for unrecoverable soft decline."
                 confidence = 0.82
+            else:
+                chosen_action = RecoveryAction.NO_ACTION
+                reasoning = "No viable action for soft decline; default to no action."
+                confidence = 0.85
 
-        # Final safety check against allowed actions
-        if allowed_actions and chosen_action.value not in allowed_actions:
-            # Pick first available allowed action
-            chosen_action = RecoveryAction(allowed_actions[0])
-            reasoning = f"Policy constraint forced fallback to allowed action: {chosen_action.value}."
-            confidence = 0.75
+        # Final safety check against allowed actions and prohibited actions
+        # Deliberate NO_ACTION safety decisions (fraud, hard decline, stopping rule) must never be replaced.
+        if chosen_action != RecoveryAction.NO_ACTION:
+            is_disallowed = bool(
+                allowed_actions and chosen_action.value not in allowed_actions
+            )
+            is_prohibited = bool(
+                prohibited_actions and chosen_action.value in prohibited_actions
+            )
+            if is_disallowed or is_prohibited:
+                # Fallback must only pick allowed actions that are NOT prohibited
+                valid_fallback: RecoveryAction | None = None
+                for act_candidate in allowed_actions:
+                    if act_candidate in prohibited_actions:
+                        continue
+                    try:
+                        valid_fallback = RecoveryAction(act_candidate)
+                        break
+                    except (ValueError, TypeError):
+                        continue
+
+                if valid_fallback is not None:
+                    chosen_action = valid_fallback
+                    reasoning = f"Policy constraint forced fallback to allowed action: {chosen_action.value}."
+                    confidence = 0.75
+                else:
+                    # Fail closed safely if no valid candidate exists
+                    chosen_action = RecoveryAction.NO_ACTION
+                    reasoning = (
+                        "Policy constraints prohibited all available actions; "
+                        "failing closed safely to no action."
+                    )
+                    confidence = 0.85
 
         return LLMRecoveryRecommendation(
             recommended_action=chosen_action,

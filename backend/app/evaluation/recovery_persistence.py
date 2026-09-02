@@ -11,6 +11,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from app.evaluation.persistence import get_evaluation_directory
 from app.evaluation.recovery_schemas import RecoveryBenchmarkReport
@@ -21,9 +22,9 @@ def get_recovery_evaluation_directory(
 ) -> Path:
     """Resolve and ensure the target directory for persisting recovery outcome reports."""
     if custom_dir is not None:
-        path = Path(custom_dir)
+        path = Path(custom_dir).resolve()
     else:
-        path = get_evaluation_directory() / "recovery_outcomes"
+        path = (get_evaluation_directory() / "recovery_outcomes").resolve()
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -78,7 +79,10 @@ def save_recovery_report(
 
     target_dir = get_recovery_evaluation_directory(directory)
     timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    clean_id = report_id or f"recovery_{report.pipeline_name}_{timestamp_str}"
+    clean_id = (
+        report_id
+        or f"recovery_{report.pipeline_name}_{timestamp_str}_{uuid4().hex[:6]}"
+    )
     if not clean_id.endswith(".json"):
         clean_id = f"{clean_id}.json"
 
@@ -115,13 +119,15 @@ def load_recovery_report(
     target_dir = get_recovery_evaluation_directory(directory)
     path_obj = Path(report_id_or_path)
 
-    if path_obj.is_absolute() and path_obj.exists():
-        file_path = path_obj
+    if path_obj.is_file():
+        file_path = path_obj.resolve()
+    elif (target_dir / path_obj).is_file():
+        file_path = (target_dir / path_obj).resolve()
     else:
         name = str(report_id_or_path).strip()
         if not name.endswith(".json"):
             name = f"{name}.json"
-        file_path = target_dir / name
+        file_path = (target_dir / name).resolve()
 
     if not file_path.exists():
         raise FileNotFoundError(f"Recovery benchmark report not found at: {file_path}")
@@ -141,6 +147,7 @@ def load_recovery_report(
 def load_latest_recovery_report(
     pipeline_name: str | None = None,
     directory: str | Path | None = None,
+    exclude_report_id: str | None = None,
 ) -> RecoveryBenchmarkReport | None:
     """
     Load the most recently saved RecoveryBenchmarkReport for a pipeline (or across all pipelines).
@@ -153,21 +160,30 @@ def load_latest_recovery_report(
         latest_file = target_dir / f"{pipeline_name}_latest.json"
         if latest_file.exists():
             try:
-                return load_recovery_report(latest_file)
+                loaded = load_recovery_report(latest_file, directory=target_dir)
+                if exclude_report_id is None or loaded.report_id != exclude_report_id:
+                    return loaded
             except (ValueError, OSError, Exception):  # noqa: BLE001, S110
                 pass
 
         matching = sorted(
             [
                 p
-                for p in target_dir.glob(f"*{pipeline_name}*.json")
+                for p in target_dir.glob("*.json")
                 if not p.name.endswith("_latest.json")
             ],
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
-        if matching:
-            return load_recovery_report(matching[0], directory=target_dir)
+        for candidate_file in matching:
+            try:
+                loaded = load_recovery_report(candidate_file, directory=target_dir)
+                if loaded.pipeline_name != pipeline_name:
+                    continue
+                if exclude_report_id is None or loaded.report_id != exclude_report_id:
+                    return loaded
+            except (ValueError, OSError):
+                continue
         return None
 
     all_files = sorted(
@@ -175,10 +191,15 @@ def load_latest_recovery_report(
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
-    if not all_files:
-        return None
+    for candidate_file in all_files:
+        try:
+            loaded = load_recovery_report(candidate_file, directory=target_dir)
+            if exclude_report_id is None or loaded.report_id != exclude_report_id:
+                return loaded
+        except (ValueError, OSError):
+            continue
 
-    return load_recovery_report(all_files[0], directory=target_dir)
+    return None
 
 
 def list_recovery_reports(

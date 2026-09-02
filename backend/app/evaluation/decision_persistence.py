@@ -11,6 +11,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from app.evaluation.decision_regression import (
     DecisionQualityThresholds,
@@ -26,9 +27,9 @@ def get_decision_evaluation_directory(
 ) -> Path:
     """Resolve and ensure the target directory for persisting decision evaluation reports."""
     if custom_dir is not None:
-        path = Path(custom_dir)
+        path = Path(custom_dir).resolve()
     else:
-        path = get_evaluation_directory() / "decisions"
+        path = (get_evaluation_directory() / "decisions").resolve()
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -88,7 +89,10 @@ def save_decision_report(
 
     target_dir = get_decision_evaluation_directory(directory)
     timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    clean_id = report_id or f"decision_{report.pipeline_name}_{timestamp_str}"
+    clean_id = (
+        report_id
+        or f"decision_{report.pipeline_name}_{timestamp_str}_{uuid4().hex[:6]}"
+    )
     if not clean_id.endswith(".json"):
         clean_id = f"{clean_id}.json"
 
@@ -129,13 +133,15 @@ def load_decision_report(
     target_dir = get_decision_evaluation_directory(directory)
     path_obj = Path(report_id_or_path)
 
-    if path_obj.is_absolute() and path_obj.exists():
-        file_path = path_obj
+    if path_obj.is_file():
+        file_path = path_obj.resolve()
+    elif (target_dir / path_obj).is_file():
+        file_path = (target_dir / path_obj).resolve()
     else:
         name = str(report_id_or_path).strip()
         if not name.endswith(".json"):
             name = f"{name}.json"
-        file_path = target_dir / name
+        file_path = (target_dir / name).resolve()
 
     if not file_path.exists():
         raise FileNotFoundError(f"Decision benchmark report not found at: {file_path}")
@@ -155,16 +161,18 @@ def load_decision_report(
 def load_latest_decision_report(
     pipeline_name: str | None = None,
     directory: str | Path | None = None,
+    exclude_report_id: str | None = None,
 ) -> DecisionBenchmarkReport | None:
     """
-    Load the most recently saved DecisionBenchmarkReport for a pipeline (or across all pipelines).
+    Load the most recently saved DecisionBenchmarkReport for a pipeline.
 
     Args:
-        pipeline_name: Optional pipeline name filter (e.g. 'deterministic_rag').
-        directory: Optional directory containing reports.
+        pipeline_name: Optional pipeline name filter.
+        directory: Directory containing reports.
+        exclude_report_id: Optional report ID to exclude (e.g. current candidate run).
 
     Returns:
-        DecisionBenchmarkReport if found, else None.
+        Newest DecisionBenchmarkReport matching criteria, or None if none exist.
     """
     target_dir = get_decision_evaluation_directory(directory)
     if not target_dir.exists():
@@ -174,21 +182,30 @@ def load_latest_decision_report(
         latest_file = target_dir / f"{pipeline_name}_latest.json"
         if latest_file.exists():
             try:
-                return load_decision_report(latest_file)
+                loaded = load_decision_report(latest_file, directory=target_dir)
+                if exclude_report_id is None or loaded.report_id != exclude_report_id:
+                    return loaded
             except (ValueError, OSError, Exception):  # noqa: BLE001, S110
                 pass
 
         matching_files = sorted(
             [
                 p
-                for p in target_dir.glob(f"*{pipeline_name}*.json")
+                for p in target_dir.glob("*.json")
                 if not p.name.endswith("_latest.json")
             ],
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
-        if matching_files:
-            return load_decision_report(matching_files[0], directory=target_dir)
+        for candidate_file in matching_files:
+            try:
+                loaded = load_decision_report(candidate_file, directory=target_dir)
+                if loaded.pipeline_name != pipeline_name:
+                    continue
+                if exclude_report_id is None or loaded.report_id != exclude_report_id:
+                    return loaded
+            except (ValueError, OSError):
+                continue
         return None
 
     # Load any newest report
@@ -197,10 +214,15 @@ def load_latest_decision_report(
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
-    if not all_files:
-        return None
+    for candidate_file in all_files:
+        try:
+            loaded = load_decision_report(candidate_file, directory=target_dir)
+            if exclude_report_id is None or loaded.report_id != exclude_report_id:
+                return loaded
+        except (ValueError, OSError):
+            continue
 
-    return load_decision_report(all_files[0])
+    return None
 
 
 def list_decision_reports(
@@ -248,6 +270,7 @@ def compare_decision_with_baseline(
 
     Raises:
         FileNotFoundError: If baseline cannot be found on disk.
+        ValueError: If the baseline report has the same report_id as current_report.
     """
     if baseline_id_or_path is not None:
         baseline_rep = load_decision_report(baseline_id_or_path, directory=directory)
@@ -255,11 +278,17 @@ def compare_decision_with_baseline(
         baseline_rep = load_latest_decision_report(
             pipeline_name=current_report.pipeline_name,
             directory=directory,
+            exclude_report_id=current_report.report_id,
         )
         if baseline_rep is None:
             raise FileNotFoundError(
                 f"No baseline report found on disk for pipeline '{current_report.pipeline_name}'."
             )
+
+    if baseline_rep.report_id == current_report.report_id:
+        raise ValueError(
+            f"Candidate benchmark report '{current_report.report_id}' cannot be compared against itself as baseline."
+        )
 
     return compare_decision_runs(
         current_report=current_report,

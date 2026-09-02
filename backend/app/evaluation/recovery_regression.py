@@ -5,10 +5,13 @@ Evaluates RecoveryBenchmarkReport results against strict financial, operational,
 and compliance thresholds to catch degradation in revenue recovery or safety violations.
 """
 
+import math
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.evaluation.recovery_comparison import (
     RecoveryStrategyUplift,
+    calculate_cost_per_recovered_dollar,
     compute_recovery_strategy_uplift,
 )
 from app.evaluation.recovery_schemas import RecoveryBenchmarkReport
@@ -212,6 +215,42 @@ def evaluate_recovery_quality_gate(
             )
         )
 
+    # 7. Cost Per Recovered Dollar / Rupee (Upper bound)
+    if t.max_cost_per_recovered_dollar is not None:
+        actual_cprd = calculate_cost_per_recovered_dollar(
+            gross_recovered=report.gross_recovered_amount,
+            intervention_cost=report.total_intervention_cost,
+        )
+        is_zero_recovery_with_cost = (
+            report.gross_recovered_amount <= 0.0
+            and report.total_intervention_cost > 0.0
+        )
+        passed = (
+            actual_cprd <= t.max_cost_per_recovered_dollar
+            and not is_zero_recovery_with_cost
+        )
+        val_display = (
+            "₹1.0000 (no revenue recovered)"
+            if is_zero_recovery_with_cost
+            else f"₹{actual_cprd:.4f}"
+        )
+        thresh_display = f"₹{t.max_cost_per_recovered_dollar:.4f}"
+        msg = f"Cost / Recovered Amount {val_display} <= {thresh_display}"
+        if not passed:
+            violations.append(
+                f"Cost Per Recovered Amount failure: actual {val_display} > maximum allowed {thresh_display}"
+            )
+        checks.append(
+            RecoveryMetricCheck(
+                metric_name="max_cost_per_recovered_dollar",
+                actual_value=actual_cprd,
+                threshold_value=t.max_cost_per_recovered_dollar,
+                passed=passed,
+                is_upper_bound=True,
+                message=msg,
+            )
+        )
+
     all_passed = len(violations) == 0
     return RecoveryQualityGateResult(
         pipeline_name=report.pipeline_name,
@@ -237,7 +276,15 @@ def compare_recovery_runs(
 
     Returns:
         RecoveryRegressionComparisonResult.
+
+    Raises:
+        ValueError: If current_report and baseline_report have the same report_id.
     """
+    if current_report.report_id == baseline_report.report_id:
+        raise ValueError(
+            f"Candidate benchmark report '{current_report.report_id}' cannot be compared against itself as baseline."
+        )
+
     uplift = compute_recovery_strategy_uplift(
         candidate_report=current_report,
         baseline_report=baseline_report,
@@ -312,24 +359,20 @@ def format_recovery_quality_gate_terminal_summary(
     ]
     for chk in result.checks:
         symbol = "[PASS]" if chk.passed else "[FAIL]"
-        val_str = (
-            f"{chk.actual_value:.1%}"
-            if "rate" in chk.metric_name
-            else (
-                f"₹{chk.actual_value:,.2f}"
-                if "cost" in chk.metric_name or "amount" in chk.metric_name
-                else f"{chk.actual_value:.2f}"
+        if "rate" in chk.metric_name:
+            val_str = f"{chk.actual_value:.1%}"
+            thresh_str = f"{chk.threshold_value:.1%}"
+        elif "dollar" in chk.metric_name:
+            val_str = (
+                "INF" if math.isinf(chk.actual_value) else f"₹{chk.actual_value:.4f}"
             )
-        )
-        thresh_str = (
-            f"{chk.threshold_value:.1%}"
-            if "rate" in chk.metric_name
-            else (
-                f"₹{chk.threshold_value:,.2f}"
-                if "cost" in chk.metric_name or "amount" in chk.metric_name
-                else f"{chk.threshold_value:.2f}"
-            )
-        )
+            thresh_str = f"₹{chk.threshold_value:.4f}"
+        elif "cost" in chk.metric_name or "amount" in chk.metric_name:
+            val_str = f"₹{chk.actual_value:,.2f}"
+            thresh_str = f"₹{chk.threshold_value:,.2f}"
+        else:
+            val_str = f"{chk.actual_value:.2f}"
+            thresh_str = f"{chk.threshold_value:.2f}"
         op = "<=" if chk.is_upper_bound else ">="
         lines.append(
             f"  {symbol:<6} {chk.metric_name:<32} {val_str:<10} {op} {thresh_str}"

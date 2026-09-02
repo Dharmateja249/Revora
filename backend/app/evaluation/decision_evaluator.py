@@ -6,6 +6,7 @@ oracles, producing immutable DecisionEvalResult records and aggregate DecisionBe
 """
 
 import asyncio
+import concurrent.futures
 import inspect
 import time
 from collections.abc import Sequence
@@ -182,13 +183,43 @@ def _run_async_or_sync(coro: Any) -> Any:
         loop = None
 
     if loop and loop.is_running():
-        # Running inside an existing event loop
-        new_loop = asyncio.new_event_loop()
-        try:
-            return new_loop.run_until_complete(coro)
-        finally:
-            new_loop.close()
+        # Running inside an existing event loop: execute in a dedicated worker thread
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(asyncio.run, coro)
+            return future.result()
     return asyncio.run(coro)
+
+
+def _create_error_eval_result(
+    case: EvaluationCase,
+    pipeline_name: str,
+    elapsed_ms: float,
+    error_msg: str,
+) -> DecisionEvalResult:
+    """Construct an error-tagged DecisionEvalResult adhering to failure-isolation contract."""
+    dgt: DecisionGroundTruth = case.decision_ground_truth  # type: ignore[assignment]
+    return DecisionEvalResult(
+        query_id=case.query_id,
+        pipeline_name=pipeline_name,
+        predicted_action=RecoveryAction.NO_ACTION,
+        expected_action=dgt.expected_action,
+        acceptable_actions=dgt.acceptable_actions,
+        prohibited_actions=dgt.prohibited_actions,
+        expected_policy_ids=dgt.expected_policy_ids,
+        is_exact_match=False,
+        is_acceptable_match=False,
+        confidence=0.0,
+        policy_overridden=False,
+        is_fallback=True,
+        fallback_reason="Pipeline execution error",
+        applied_policy_ids=(),
+        violated_policy_ids=(),
+        referenced_case_ids=(),
+        key_factors=(),
+        latency_ms=elapsed_ms,
+        error=error_msg,
+        metadata={"status": "error"},
+    )
 
 
 class DecisionEvaluator:
@@ -236,8 +267,8 @@ class DecisionEvaluator:
         """
         Evaluate a single EvaluationCase against a decision pipeline.
 
-        Catches unexpected pipeline errors and produces an error-tagged DecisionEvalResult
-        without terminating full dataset evaluation.
+        Catches unexpected pipeline errors and malformed outputs, producing an error-tagged
+        DecisionEvalResult without terminating full dataset evaluation.
         """
         if case.decision_ground_truth is None:
             raise ValueError(
@@ -259,10 +290,10 @@ class DecisionEvaluator:
         )
 
         start_time = time.perf_counter()
-        raw_output: Any = None
-        error_msg: str | None = None
 
         try:
+            # 1. Pipeline Execution
+            raw_output: Any = None
             if hasattr(pipeline, "evaluate_async") and callable(
                 pipeline.evaluate_async
             ):
@@ -307,109 +338,114 @@ class DecisionEvaluator:
                 raise TypeError(
                     f"Pipeline of type '{type(pipeline).__name__}' does not implement 'evaluate', 'decide', or __call__."
                 )
-            elapsed_ms = max(0.0, (time.perf_counter() - start_time) * 1000.0)
-        except Exception as exc:  # noqa: BLE001
-            elapsed_ms = max(0.0, (time.perf_counter() - start_time) * 1000.0)
-            error_msg = f"{type(exc).__name__}: {exc}"
 
-        if error_msg is not None or raw_output is None:
+            # 2. Output Parsing & Normalization
+            predicted_action: RecoveryAction
+            confidence: float
+            policy_overridden: bool = False
+            is_fallback: bool = False
+            fallback_reason: str | None = None
+            applied_policy_ids: tuple[str, ...] = ()
+            violated_policy_ids: tuple[str, ...] = ()
+            referenced_case_ids: tuple[str, ...] = ()
+            key_factors: tuple[str, ...] = ()
+
+            if isinstance(raw_output, RecoveryDecision):
+                predicted_action = raw_output.recommended_action
+                confidence = raw_output.confidence
+                basis = dict(raw_output.decision_basis)
+                policy_overridden = bool(basis.get("policy_overridden", False))
+                applied_policy_ids = tuple(
+                    str(x) for x in basis.get("applied_policy_ids", ())
+                )
+                violated_policy_ids = tuple(
+                    str(x) for x in basis.get("violated_policy_ids", ())
+                )
+                is_fallback = bool(basis.get("is_fallback", False))
+                fallback_reason = basis.get("fallback_reason")
+            elif isinstance(raw_output, AgentDecisionResult):
+                predicted_action = raw_output.recommendation.recommended_action
+                confidence = raw_output.recommendation.confidence
+                meta = dict(raw_output.metadata)
+                policy_overridden = bool(meta.get("policy_overridden", False))
+                applied_policy_ids = tuple(
+                    str(x) for x in meta.get("applied_policy_ids", ())
+                )
+                violated_policy_ids = tuple(
+                    str(x) for x in meta.get("violated_policy_ids", ())
+                )
+                is_fallback = raw_output.is_fallback
+                fallback_reason = raw_output.fallback_reason
+                referenced_case_ids = tuple(
+                    str(x) for x in raw_output.recommendation.referenced_case_ids
+                )
+                key_factors = tuple(
+                    str(x) for x in raw_output.recommendation.key_factors
+                )
+            elif hasattr(raw_output, "recommended_action"):
+                predicted_action = raw_output.recommended_action
+                confidence = getattr(raw_output, "confidence", 1.0)
+            else:
+                raise TypeError(
+                    f"Unsupported output type '{type(raw_output).__name__}' returned by pipeline {pipeline_name}."
+                )
+
+            # Validate predicted_action
+            if not isinstance(predicted_action, RecoveryAction):
+                try:
+                    predicted_action = RecoveryAction(predicted_action)
+                except Exception as act_exc:
+                    raise ValueError(
+                        f"Invalid predicted action '{predicted_action}': {act_exc}"
+                    ) from act_exc
+
+            # Validate confidence
+            try:
+                confidence = float(confidence)
+            except (TypeError, ValueError) as conf_exc:
+                raise ValueError(
+                    f"Confidence must be a numeric float, got: {confidence!r}"
+                ) from conf_exc
+
+            if confidence < 0.0 or confidence > 1.0:
+                raise ValueError(
+                    f"Confidence {confidence} is outside valid range [0.0, 1.0]."
+                )
+
+            is_exact = bool(predicted_action == dgt.expected_action)
+            is_acceptable = bool(predicted_action in dgt.acceptable_actions)
+            elapsed_ms = max(0.0, (time.perf_counter() - start_time) * 1000.0)
+
             return DecisionEvalResult(
                 query_id=case.query_id,
                 pipeline_name=pipeline_name,
-                predicted_action=RecoveryAction.NO_ACTION,
+                predicted_action=predicted_action,
                 expected_action=dgt.expected_action,
                 acceptable_actions=dgt.acceptable_actions,
                 prohibited_actions=dgt.prohibited_actions,
                 expected_policy_ids=dgt.expected_policy_ids,
-                is_exact_match=False,
-                is_acceptable_match=False,
-                confidence=0.0,
-                policy_overridden=False,
-                is_fallback=True,
-                fallback_reason="Pipeline execution error",
-                applied_policy_ids=(),
-                violated_policy_ids=(),
-                referenced_case_ids=(),
-                key_factors=(),
+                is_exact_match=is_exact,
+                is_acceptable_match=is_acceptable,
+                confidence=confidence,
+                policy_overridden=policy_overridden,
+                is_fallback=is_fallback,
+                fallback_reason=fallback_reason,
+                applied_policy_ids=applied_policy_ids,
+                violated_policy_ids=violated_policy_ids,
+                referenced_case_ids=referenced_case_ids,
+                key_factors=key_factors,
                 latency_ms=elapsed_ms,
-                error=error_msg,
-                metadata={"status": "error"},
+                error=None,
+                metadata={"status": "success"},
             )
-
-        # Parse standard output (RecoveryDecision or AgentDecisionResult)
-        predicted_action: RecoveryAction
-        confidence: float
-        policy_overridden: bool = False
-        is_fallback: bool = False
-        fallback_reason: str | None = None
-        applied_policy_ids: tuple[str, ...] = ()
-        violated_policy_ids: tuple[str, ...] = ()
-        referenced_case_ids: tuple[str, ...] = ()
-        key_factors: tuple[str, ...] = ()
-
-        if isinstance(raw_output, RecoveryDecision):
-            predicted_action = raw_output.recommended_action
-            confidence = raw_output.confidence
-            basis = dict(raw_output.decision_basis)
-            policy_overridden = bool(basis.get("policy_overridden", False))
-            applied_policy_ids = tuple(
-                str(x) for x in basis.get("applied_policy_ids", ())
+        except Exception as exc:  # noqa: BLE001
+            elapsed_ms = max(0.0, (time.perf_counter() - start_time) * 1000.0)
+            return _create_error_eval_result(
+                case=case,
+                pipeline_name=pipeline_name,
+                elapsed_ms=elapsed_ms,
+                error_msg=f"{type(exc).__name__}: {exc}",
             )
-            violated_policy_ids = tuple(
-                str(x) for x in basis.get("violated_policy_ids", ())
-            )
-            is_fallback = bool(basis.get("is_fallback", False))
-            fallback_reason = basis.get("fallback_reason")
-        elif isinstance(raw_output, AgentDecisionResult):
-            predicted_action = raw_output.recommendation.recommended_action
-            confidence = raw_output.recommendation.confidence
-            meta = dict(raw_output.metadata)
-            policy_overridden = bool(meta.get("policy_overridden", False))
-            applied_policy_ids = tuple(
-                str(x) for x in meta.get("applied_policy_ids", ())
-            )
-            violated_policy_ids = tuple(
-                str(x) for x in meta.get("violated_policy_ids", ())
-            )
-            is_fallback = raw_output.is_fallback
-            fallback_reason = raw_output.fallback_reason
-            referenced_case_ids = tuple(
-                str(x) for x in raw_output.recommendation.referenced_case_ids
-            )
-            key_factors = tuple(str(x) for x in raw_output.recommendation.key_factors)
-        elif hasattr(raw_output, "recommended_action"):
-            predicted_action = raw_output.recommended_action
-            confidence = getattr(raw_output, "confidence", 1.0)
-        else:
-            raise TypeError(
-                f"Unsupported output type '{type(raw_output).__name__}' returned by pipeline {pipeline_name}."
-            )
-
-        is_exact = bool(predicted_action == dgt.expected_action)
-        is_acceptable = bool(predicted_action in dgt.acceptable_actions)
-
-        return DecisionEvalResult(
-            query_id=case.query_id,
-            pipeline_name=pipeline_name,
-            predicted_action=predicted_action,
-            expected_action=dgt.expected_action,
-            acceptable_actions=dgt.acceptable_actions,
-            prohibited_actions=dgt.prohibited_actions,
-            expected_policy_ids=dgt.expected_policy_ids,
-            is_exact_match=is_exact,
-            is_acceptable_match=is_acceptable,
-            confidence=confidence,
-            policy_overridden=policy_overridden,
-            is_fallback=is_fallback,
-            fallback_reason=fallback_reason,
-            applied_policy_ids=applied_policy_ids,
-            violated_policy_ids=violated_policy_ids,
-            referenced_case_ids=referenced_case_ids,
-            key_factors=key_factors,
-            latency_ms=elapsed_ms,
-            error=None,
-            metadata={"status": "success"},
-        )
 
     def evaluate(
         self,

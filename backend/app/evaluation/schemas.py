@@ -10,7 +10,7 @@ import types
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import (
     BaseModel,
@@ -556,6 +556,7 @@ class DecisionBenchmarkReport(BaseModel):
     aggregate_metrics: Mapping[str, float] = Field(default_factory=dict)
     evaluated_at: datetime = Field(default_factory=utc_now)
     evaluation_version: str = "1.0"
+    report_id: str = Field(default_factory=lambda: f"decision_{uuid4().hex[:12]}")
     metadata: Mapping[str, Any] = Field(default_factory=dict)
 
     @field_validator("pipeline_name", mode="before")

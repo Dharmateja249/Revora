@@ -86,7 +86,7 @@ def calculate_cost_per_recovered_dollar(
     """
     Calculate the operational cost spent per dollar of gross recovered revenue.
     Formula: Intervention Cost / Gross Recovered
-    If Gross Recovered is 0: returns 0.0 if cost is 0, else 1.0.
+    If Gross Recovered is 0: returns 1.0 if cost > 0, else 0.0.
     """
     if gross_recovered <= 0.0:
         return 1.0 if intervention_cost > 0.0 else 0.0
@@ -106,7 +106,42 @@ def compute_recovery_strategy_uplift(
 
     Returns:
         RecoveryStrategyUplift instance.
+
+    Raises:
+        ValueError: If either report contains duplicate scenario IDs or if scenario sets mismatch.
     """
+    # Validate scenario set integrity
+    c_ids = [o.scenario_id for o in candidate_report.outcomes]
+    b_ids = [o.scenario_id for o in baseline_report.outcomes]
+
+    if len(c_ids) != len(set(c_ids)):
+        duplicates = sorted({x for x in c_ids if c_ids.count(x) > 1})
+        raise ValueError(
+            f"Candidate report '{candidate_report.pipeline_name}' contains duplicate scenario IDs: {duplicates}"
+        )
+
+    if len(b_ids) != len(set(b_ids)):
+        duplicates = sorted({x for x in b_ids if b_ids.count(x) > 1})
+        raise ValueError(
+            f"Baseline report '{baseline_report.pipeline_name}' contains duplicate scenario IDs: {duplicates}"
+        )
+
+    c_set = set(c_ids)
+    b_set = set(b_ids)
+
+    if c_set != b_set:
+        missing_in_candidate = sorted(b_set - c_set)
+        missing_in_baseline = sorted(c_set - b_set)
+        err_parts: list[str] = []
+        if missing_in_candidate:
+            err_parts.append(f"missing in candidate: {missing_in_candidate}")
+        if missing_in_baseline:
+            err_parts.append(f"missing in baseline: {missing_in_baseline}")
+        raise ValueError(
+            f"Scenario ID mismatch between candidate '{candidate_report.pipeline_name}' "
+            f"and baseline '{baseline_report.pipeline_name}': {'; '.join(err_parts)}"
+        )
+
     c_gross = candidate_report.gross_recovered_amount
     b_gross = baseline_report.gross_recovered_amount
 
@@ -144,9 +179,7 @@ def compute_recovery_strategy_uplift(
     identical = 0
 
     for c_out in candidate_report.outcomes:
-        b_out = baseline_case_map.get(c_out.scenario_id)
-        if b_out is None:
-            continue
+        b_out = baseline_case_map[c_out.scenario_id]
 
         # Better net recovery, or resolved violation without losing net
         net_diff = c_out.net_recovered - b_out.net_recovered

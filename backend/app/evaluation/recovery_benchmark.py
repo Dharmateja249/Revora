@@ -193,12 +193,13 @@ def run_recovery_cli(
         action="store_true",
         help="Disable automatic artifact file persistence.",
     )
-    parser.add_argument(
+    format_group = parser.add_mutually_exclusive_group()
+    format_group.add_argument(
         "--json",
         action="store_true",
         help="Print machine-readable JSON report to stdout.",
     )
-    parser.add_argument(
+    format_group.add_argument(
         "--markdown",
         action="store_true",
         help="Print human-readable Markdown report to stdout.",
@@ -251,6 +252,12 @@ def run_recovery_cli(
         help="Maximum allowed total intervention cost in INR.",
     )
     parser.add_argument(
+        "--max-cost-per-recovered-dollar",
+        type=float,
+        default=None,
+        help="Maximum allowed cost spent per recovered currency unit.",
+    )
+    parser.add_argument(
         "--compare-baseline",
         type=str,
         default=None,
@@ -272,11 +279,39 @@ def run_recovery_cli(
         return 1
 
     try:
+        # 1. Resolve / read previous baseline first if requested
+        pre_resolved_baselines: dict[str, RecoveryBenchmarkReport] = {}
+        if parsed.compare_baseline:
+            from app.evaluation.recovery_persistence import (
+                load_latest_recovery_report,
+                load_recovery_report,
+            )
+
+            pipe_names = (
+                parsed.pipelines
+                if parsed.pipelines
+                else ["deterministic_baseline", "deterministic_rag", "agent_rag"]
+            )
+            for p_name in pipe_names:
+                if parsed.compare_baseline == "latest":
+                    b_rep = load_latest_recovery_report(
+                        pipeline_name=p_name,
+                        directory=parsed.output_dir,
+                    )
+                else:
+                    b_rep = load_recovery_report(
+                        parsed.compare_baseline,
+                        directory=parsed.output_dir,
+                    )
+                if b_rep is not None:
+                    pre_resolved_baselines[p_name] = b_rep
+
+        # 2. Run / create candidate benchmark without persisting prematurely
         reports = run_recovery_benchmark(
             scenarios=scenarios,
             pipelines=parsed.pipelines,
             output_dir=parsed.output_dir,
-            save_artifacts=not parsed.no_save,
+            save_artifacts=False,
         )
 
         if not parsed.quiet and not parsed.json and not parsed.markdown:
@@ -296,7 +331,8 @@ def run_recovery_cli(
                     )
                 )
 
-        # Check disk baseline regression if requested
+        # 3. Compare candidate against retained baseline
+        has_regression = False
         if parsed.compare_baseline:
             from app.evaluation.recovery_persistence import (
                 load_latest_recovery_report,
@@ -304,26 +340,28 @@ def run_recovery_cli(
             )
             from app.evaluation.recovery_regression import compare_recovery_runs
 
-            has_regression = False
             for rep in reports.values():
-                if parsed.compare_baseline == "latest":
-                    base_rep = load_latest_recovery_report(
-                        pipeline_name=rep.pipeline_name,
-                        directory=parsed.output_dir,
-                    )
-                    if base_rep is None:
-                        raise FileNotFoundError(
-                            f"No latest recovery baseline report found on disk for '{rep.pipeline_name}'."
+                b_rep = pre_resolved_baselines.get(rep.pipeline_name)
+                if b_rep is None:
+                    if parsed.compare_baseline == "latest":
+                        b_rep = load_latest_recovery_report(
+                            pipeline_name=rep.pipeline_name,
+                            directory=parsed.output_dir,
+                            exclude_report_id=rep.report_id,
                         )
-                else:
-                    base_rep = load_recovery_report(
-                        parsed.compare_baseline,
-                        directory=parsed.output_dir,
+                    else:
+                        b_rep = load_recovery_report(
+                            parsed.compare_baseline,
+                            directory=parsed.output_dir,
+                        )
+                if b_rep is None:
+                    raise FileNotFoundError(
+                        f"No latest recovery baseline report found on disk for '{rep.pipeline_name}'."
                     )
 
                 comp_res = compare_recovery_runs(
                     current_report=rep,
-                    baseline_report=base_rep,
+                    baseline_report=b_rep,
                 )
                 if not parsed.quiet:
                     status_str = "PASS" if comp_res.passed else "REGRESSION DETECTED"
@@ -337,10 +375,8 @@ def run_recovery_cli(
                 if not comp_res.passed:
                     has_regression = True
 
-            if parsed.assert_no_regressions and has_regression:
-                return 1
-
-        # Check quality gates if requested
+        # 4. Check quality gates if requested
+        quality_gate_failed = False
         quality_gate_requested = bool(
             parsed.assert_quality_gate
             or parsed.min_recovery_rate is not None
@@ -349,6 +385,7 @@ def run_recovery_cli(
             or parsed.max_stopping_violation is not None
             or parsed.max_unnecessary_intervention is not None
             or parsed.max_cost is not None
+            or parsed.max_cost_per_recovered_dollar is not None
         )
 
         if quality_gate_requested:
@@ -373,9 +410,9 @@ def run_recovery_cli(
                 ),
                 max_unnecessary_intervention_rate=parsed.max_unnecessary_intervention,
                 max_total_intervention_cost=parsed.max_cost,
+                max_cost_per_recovered_dollar=parsed.max_cost_per_recovered_dollar,
             )
 
-            all_passed = True
             for rep in reports.values():
                 gate_res = evaluate_recovery_quality_gate(rep, thresholds=thresholds)
                 if not parsed.quiet:
@@ -383,10 +420,35 @@ def run_recovery_cli(
                         "\n" + format_recovery_quality_gate_terminal_summary(gate_res)
                     )
                 if not gate_res.passed:
-                    all_passed = False
+                    quality_gate_failed = True
 
-            if not all_passed:
-                return 1
+        # 5. Persist / publish candidate and latest appropriately
+        if not parsed.no_save:
+            from app.evaluation.recovery_persistence import (
+                get_recovery_evaluation_directory,
+            )
+            from app.evaluation.recovery_reporting import (
+                save_recovery_benchmark_artifacts,
+            )
+
+            target_dir = get_recovery_evaluation_directory(parsed.output_dir)
+            for rep in reports.values():
+                save_recovery_benchmark_artifacts(
+                    report=rep,
+                    output_dir=target_dir,
+                )
+            if len(reports) > 1:
+                save_recovery_benchmark_artifacts(
+                    report=reports,
+                    output_dir=target_dir,
+                    base_filename="recovery_strategy_comparison",
+                )
+
+        if parsed.assert_no_regressions and has_regression:
+            return 1
+
+        if quality_gate_failed:
+            return 1
 
         return 0
     except Exception as exc:  # noqa: BLE001
