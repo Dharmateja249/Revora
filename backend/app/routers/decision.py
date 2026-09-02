@@ -6,10 +6,18 @@ Contains no RAG, LLM, or policy evaluation logic.
 """
 
 import logging
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 
-from app.auth import AuthenticatedPrincipal, get_current_principal
+from app.auth import (
+    AuthenticatedPrincipal,
+    create_access_token,
+    get_current_principal,
+    is_known_demo_customer,
+)
+from app.config import Settings, get_settings
 from app.recovery_decision_service import (
     RecoveryDecisionService,
     get_recovery_decision_service,
@@ -22,6 +30,50 @@ from app.schemas.decision import (
 logger = logging.getLogger("revora.decision_router")
 
 router = APIRouter(prefix="/api/recovery", tags=["Recovery Decision"])
+auth_router = APIRouter(prefix="/api/auth", tags=["Authentication"])
+
+
+class TokenRequest(BaseModel):
+    customer_id: UUID
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    customer_id: UUID
+    expires_in: int = 86400
+
+
+@auth_router.post(
+    "/token",
+    response_model=TokenResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Issue verifiable demo authentication token for customer",
+    description="Issues a cryptographically verifiable token bound to the requested customer identity.",
+)
+def issue_demo_token(
+    request: TokenRequest,
+    settings: Settings = Depends(get_settings),  # noqa: B008
+) -> TokenResponse:
+    if not settings.ENABLE_DEMO_AUTH_ENDPOINT:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Demo authentication endpoint is disabled.",
+        )
+
+    if not is_known_demo_customer(request.customer_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Demo token issuance is restricted to authorized demo customer profiles.",
+        )
+
+    token = create_access_token(request.customer_id)
+    return TokenResponse(
+        access_token=token,
+        token_type="bearer",
+        customer_id=request.customer_id,
+        expires_in=86400,
+    )
 
 
 @router.post(
