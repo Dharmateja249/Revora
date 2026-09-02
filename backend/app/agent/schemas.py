@@ -131,6 +131,10 @@ class AgentDecisionPromptContext(BaseModel):
         ...,
         description="Anonymized customer recovery metrics and success statistics.",
     )
+    attempt_budget: Mapping[str, Any] = Field(
+        default_factory=dict,
+        description="Attempt budget tracking current attempt, maximum allowed attempts, and remaining attempts.",
+    )
     recovery_attempt_history: tuple[Mapping[str, Any], ...] = Field(
         default_factory=tuple,
         description="Chronological sequence of prior attempts on the active payment.",
@@ -156,7 +160,9 @@ class AgentDecisionPromptContext(BaseModel):
         description="Human-readable policy descriptions governing this recovery scenario.",
     )
 
-    @field_validator("current_payment", "customer_profile", mode="before")
+    @field_validator(
+        "current_payment", "customer_profile", "attempt_budget", mode="before"
+    )
     @classmethod
     def _validate_dict_fields(cls, v: Any) -> Any:
         if v is None:
@@ -165,7 +171,9 @@ class AgentDecisionPromptContext(BaseModel):
             raise TypeError(f"Expected mapping, got {type(v).__name__}")
         return v
 
-    @field_validator("current_payment", "customer_profile", mode="after")
+    @field_validator(
+        "current_payment", "customer_profile", "attempt_budget", mode="after"
+    )
     @classmethod
     def _freeze_dict_fields(cls, v: Any) -> Mapping[str, Any]:
         return _freeze_nested(v) if v is not None else types.MappingProxyType({})
@@ -203,7 +211,7 @@ class AgentDecisionPromptContext(BaseModel):
         clean = str(v).strip()
         return clean if clean else None
 
-    @field_serializer("current_payment", "customer_profile")
+    @field_serializer("current_payment", "customer_profile", "attempt_budget")
     def _serialize_mappings(self, v: Mapping[str, Any], _info: Any) -> dict[str, Any]:
         return _unfreeze_for_serialization(v)
 

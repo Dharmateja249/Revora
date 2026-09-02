@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
+
 from app.agent.context_builder import AgentContextBuilder
 from app.agent.schemas import AgentDecisionPromptContext
 from app.context import (
@@ -558,3 +559,168 @@ def test_invalid_max_historical_cases_rejected():
 
     with pytest.raises(TypeError, match="must be an integer"):
         AgentContextBuilder(max_historical_cases=True)  # type: ignore
+
+
+def test_invalid_max_attempts_rejected():
+    """Verify validation on max_attempts parameter."""
+    with pytest.raises(ValueError, match="positive integer"):
+        AgentContextBuilder(max_attempts=0)
+
+    with pytest.raises(ValueError, match="positive integer"):
+        AgentContextBuilder(max_attempts=-1)
+
+    with pytest.raises(TypeError, match="must be an integer"):
+        AgentContextBuilder(max_attempts="three")  # type: ignore
+
+    with pytest.raises(TypeError, match="must be an integer"):
+        AgentContextBuilder(max_attempts=True)  # type: ignore
+
+
+def test_attempt_budget_construction_defaults(
+    rich_customer_recovery_context, sample_policy_context
+):
+    """Verify attempt budget mapping with 2 prior attempts and max_attempts=3."""
+    builder = AgentContextBuilder(max_attempts=3)
+    prompt_ctx = builder.build_prompt_context(
+        rich_customer_recovery_context,
+        policy_context=sample_policy_context,
+    )
+
+    budget = prompt_ctx.attempt_budget
+    assert budget["current_attempt"] == 3  # 2 prior attempts + 1
+    assert budget["max_attempts"] == 3
+    assert budget["remaining_attempts"] == 0
+
+
+def test_attempt_budget_remaining_attempts_calculation(sample_policy_context):
+    """Verify attempt budget calculation for 0, 1, 2, and 3 prior attempts."""
+    from uuid import uuid4
+
+    from app.context import (
+        CustomerContext,
+        CustomerRecoveryContext,
+        PaymentContext,
+        RecoveryAttemptContext,
+    )
+
+    customer = CustomerContext(customer_id=uuid4())
+    payment = PaymentContext(
+        payment_id=uuid4(), amount=1000.0, payment_method="upi", status="failed"
+    )
+
+    # 0 prior attempts
+    ctx_0 = CustomerRecoveryContext(
+        customer=customer,
+        current_payment=payment,
+        current_payment_attempts=[],
+    )
+    builder = AgentContextBuilder(max_attempts=3)
+    res_0 = builder.build_prompt_context(ctx_0, policy_context=sample_policy_context)
+    assert res_0.attempt_budget == {
+        "current_attempt": 1,
+        "max_attempts": 3,
+        "remaining_attempts": 2,
+    }
+
+    # 1 prior attempt
+    att_1 = RecoveryAttemptContext(action="retry_payment", status="failed")
+    ctx_1 = CustomerRecoveryContext(
+        customer=customer,
+        current_payment=payment,
+        current_payment_attempts=[att_1],
+    )
+    res_1 = builder.build_prompt_context(ctx_1, policy_context=sample_policy_context)
+    assert res_1.attempt_budget == {
+        "current_attempt": 2,
+        "max_attempts": 3,
+        "remaining_attempts": 1,
+    }
+
+    # 3 prior attempts (exceeded budget, remaining capped at 0)
+    att_2 = RecoveryAttemptContext(action="retry_payment", status="failed")
+    att_3 = RecoveryAttemptContext(action="payment_link", status="failed")
+    ctx_3 = CustomerRecoveryContext(
+        customer=customer,
+        current_payment=payment,
+        current_payment_attempts=[att_1, att_2, att_3],
+    )
+    res_3 = builder.build_prompt_context(ctx_3, policy_context=sample_policy_context)
+    assert res_3.attempt_budget == {
+        "current_attempt": 4,
+        "max_attempts": 3,
+        "remaining_attempts": 0,
+    }
+
+
+def test_attempt_budget_missing_opportunity_information(sample_policy_context):
+    """Verify attempt budget gracefully handles None opportunity without crashing."""
+    from uuid import uuid4
+
+    from app.context import CustomerContext, CustomerRecoveryContext, PaymentContext
+
+    ctx = CustomerRecoveryContext(
+        customer=CustomerContext(customer_id=uuid4()),
+        current_payment=PaymentContext(
+            payment_id=uuid4(), amount=500.0, payment_method="card", status="failed"
+        ),
+        current_opportunity=None,
+        current_payment_attempts=[],
+    )
+    builder = AgentContextBuilder()
+    res = builder.build_prompt_context(ctx, policy_context=sample_policy_context)
+    assert res.attempt_budget == {
+        "current_attempt": 1,
+        "max_attempts": 3,
+        "remaining_attempts": 2,
+    }
+
+
+def test_attempt_budget_terminal_opportunity(sample_policy_context):
+    """Verify terminal opportunity status caps remaining attempts to 0."""
+    from uuid import uuid4
+
+    from app.context import (
+        CustomerContext,
+        CustomerRecoveryContext,
+        PaymentContext,
+        RecoveryOpportunityContext,
+    )
+
+    ctx = CustomerRecoveryContext(
+        customer=CustomerContext(customer_id=uuid4()),
+        current_payment=PaymentContext(
+            payment_id=uuid4(), amount=500.0, payment_method="card", status="failed"
+        ),
+        current_opportunity=RecoveryOpportunityContext(
+            opportunity_id=uuid4(),
+            status="recovered",
+            revenue_at_risk=500.0,
+        ),
+        current_payment_attempts=[],
+    )
+    builder = AgentContextBuilder()
+    res = builder.build_prompt_context(ctx, policy_context=sample_policy_context)
+    assert res.attempt_budget == {
+        "current_attempt": 1,
+        "max_attempts": 3,
+        "remaining_attempts": 0,
+    }
+
+
+def test_attempt_budget_no_internal_ids_leaked(
+    rich_customer_recovery_context, sample_policy_context
+):
+    """Verify attempt_budget dictionary contains only safe numerical attributes."""
+    builder = AgentContextBuilder()
+    res = builder.build_prompt_context(
+        rich_customer_recovery_context, policy_context=sample_policy_context
+    )
+
+    budget = res.attempt_budget
+    assert set(budget.keys()) == {
+        "current_attempt",
+        "max_attempts",
+        "remaining_attempts",
+    }
+    for v in budget.values():
+        assert isinstance(v, int)

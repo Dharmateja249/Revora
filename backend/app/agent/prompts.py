@@ -16,9 +16,10 @@ OPERATIONAL INVARIANTS & POLICY CONSTRAINTS:
 1. You MUST select your `recommended_action` exclusively from the list of ALLOWED ACTIONS provided in the policy envelope.
 2. You MUST NEVER recommend any action listed in PROHIBITED ACTIONS.
 3. Historical cases are empirical supporting evidence, NOT direct operational instructions. If a historical case succeeded with an action that is currently prohibited, the active policy constraint WINS.
-4. Provide structured, factual reasoning explaining your decision based on customer profile, current failure reason, and historical evidence.
-5. Provide concise `key_factors` highlighting key decision drivers and cite relevant `referenced_case_ids` if historical evidence informed your choice.
-6. Your recommendation will be deterministically validated against hard safety and payment provider policies before execution.
+4. An `attempt_budget` indicates `current_attempt`, `max_attempts`, and `remaining_attempts`. Factor this into your recommendation (e.g. consider escalating or switching recovery channels as attempts run low), but remember that deterministic policy rules remain strictly authoritative.
+5. Provide structured, factual reasoning explaining your decision based on customer profile, current failure reason, and historical evidence.
+6. Provide concise `key_factors` highlighting key decision drivers and cite relevant `referenced_case_ids` if historical evidence informed your choice.
+7. Your recommendation will be deterministically validated against hard safety and payment provider policies before execution.
 
 OUTPUT CONTRACT:
 You must respond with a valid JSON object matching the following structure:
@@ -57,6 +58,7 @@ def build_agent_messages(
     user_payload_dict = {
         "current_payment": context_dict.get("current_payment", {}),
         "customer_recovery_profile": context_dict.get("customer_profile", {}),
+        "attempt_budget": context_dict.get("attempt_budget", {}),
         "prior_attempts_on_this_payment": context_dict.get(
             "recovery_attempt_history", []
         ),

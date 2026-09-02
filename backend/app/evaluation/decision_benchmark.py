@@ -33,6 +33,7 @@ def resolve_decision_pipeline(
     name_or_instance: str | DecisionPipeline | Any,
     agent_orchestrator: AgentOrchestrator | None = None,
     allow_default_evaluation_orchestrator: bool = True,
+    llm_provider: str = "mock",
 ) -> Any:
     """
     Resolve a pipeline name or instance into an executable DecisionPipeline adapter.
@@ -42,6 +43,7 @@ def resolve_decision_pipeline(
         agent_orchestrator: Optional AgentOrchestrator instance for agent pipelines.
         allow_default_evaluation_orchestrator: Whether to auto-construct an offline evaluation
             orchestrator if agent_orchestrator is not provided.
+        llm_provider: LLM provider identifier for agent pipelines ('mock' or 'openai'). Defaults to 'mock'.
 
     Returns:
         Executable pipeline adapter.
@@ -54,18 +56,34 @@ def resolve_decision_pipeline(
         return DeterministicBaselinePipeline()
     if norm_name in ("deterministic_rag", "rag"):
         return DeterministicRAGPipeline()
-    if norm_name in ("agent_rag", "agent", "orchestrator"):
+    if norm_name in ("agent_rag", "agent", "orchestrator", "openai_agent_rag"):
+        pipeline_name = (
+            "openai_agent_rag" if norm_name == "openai_agent_rag" else "agent_rag"
+        )
+        effective_provider = (
+            "openai"
+            if norm_name == "openai_agent_rag"
+            else llm_provider.strip().lower()
+        )
         if agent_orchestrator is None:
             if not allow_default_evaluation_orchestrator:
                 raise ValueError(
                     "AgentRAGPipeline requires an active AgentOrchestrator instance."
                 )
-            from app.evaluation.agent_evaluation_provider import (
-                create_evaluation_agent_orchestrator,
-            )
+            if effective_provider == "openai":
+                from app.agent.factory import create_llm_provider
 
-            agent_orchestrator = create_evaluation_agent_orchestrator()
-        return AgentRAGPipeline(agent_orchestrator=agent_orchestrator)
+                provider = create_llm_provider(provider="openai")
+                agent_orchestrator = AgentOrchestrator(provider=provider)
+            else:
+                from app.evaluation.agent_evaluation_provider import (
+                    create_evaluation_agent_orchestrator,
+                )
+
+                agent_orchestrator = create_evaluation_agent_orchestrator()
+        return AgentRAGPipeline(
+            agent_orchestrator=agent_orchestrator, name=pipeline_name
+        )
 
     raise ValueError(f"Unknown decision pipeline identifier: '{name_or_instance}'")
 
@@ -77,6 +95,7 @@ def run_decision_benchmark(
     output_dir: Path | str | None = None,
     save_artifacts: bool = True,
     agent_orchestrator: AgentOrchestrator | None = None,
+    llm_provider: str = "mock",
 ) -> dict[str, DecisionBenchmarkReport]:
     """
     Execute reproducible decision evaluation across one or more recovery pipelines.
@@ -88,6 +107,7 @@ def run_decision_benchmark(
         output_dir: Target directory for persisted artifacts (defaults to evaluation_results/decisions).
         save_artifacts: Whether to write JSON and Markdown benchmark files to disk.
         agent_orchestrator: Optional orchestrator instance for agent pipelines.
+        llm_provider: LLM provider identifier for agent pipelines ('mock' or 'openai'). Defaults to 'mock'.
 
     Returns:
         Dictionary mapping pipeline_name -> DecisionBenchmarkReport.
@@ -112,7 +132,11 @@ def run_decision_benchmark(
     )
 
     resolved_pipelines = [
-        resolve_decision_pipeline(p, agent_orchestrator=agent_orchestrator)
+        resolve_decision_pipeline(
+            p,
+            agent_orchestrator=agent_orchestrator,
+            llm_provider=llm_provider,
+        )
         for p in pipe_specs
     ]
 
@@ -224,6 +248,13 @@ def run_decision_cli(
         action="append",
         dest="pipelines",
         help="Specify one or more pipelines to evaluate (deterministic_baseline, deterministic_rag, agent_rag).",
+    )
+    parser.add_argument(
+        "--llm-provider",
+        type=str,
+        default="mock",
+        choices=["mock", "openai"],
+        help="LLM provider for agent pipelines ('mock' for offline evaluation, 'openai' for live OpenAI). Defaults to 'mock'.",
     )
     parser.add_argument(
         "--output-dir",
@@ -350,6 +381,7 @@ def run_decision_cli(
             pipelines=parsed.pipelines,
             output_dir=parsed.output_dir,
             save_artifacts=False,
+            llm_provider=parsed.llm_provider,
         )
 
         if not parsed.quiet and not parsed.json and not parsed.markdown:
