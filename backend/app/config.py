@@ -29,6 +29,16 @@ class Settings(BaseSettings):
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
+    def model_post_init(self, context: object, /) -> None:
+        """Validate that live Razorpay API calls strictly require an HTTPS endpoint."""
+        super().model_post_init(context)
+        if not self.RAZORPAY_DRY_RUN and not self.RAZORPAY_BASE_URL.lower().startswith(
+            "https://"
+        ):
+            raise ValueError(
+                "Live Razorpay API requests require a secure HTTPS base URL."
+            )
+
 
 @lru_cache
 def get_settings() -> Settings:

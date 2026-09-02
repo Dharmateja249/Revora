@@ -137,8 +137,8 @@ class RecoveryDecisionRequest(BaseModel):
         description="Maximum allowed recovery attempts for this opportunity.",
     )
     execute_action: bool = Field(
-        default=True,
-        description="Whether to execute the policy-approved recovery action via gateway adapter.",
+        default=False,
+        description="Whether to execute the policy-approved recovery action via gateway adapter. Defaults to False (opt-in).",
     )
 
 

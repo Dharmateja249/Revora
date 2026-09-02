@@ -74,6 +74,11 @@ class RazorpayAdapter:
         self._dry_run = bool(resolved_dry_run)
         self._client = client
 
+        if not self._dry_run and not self._base_url.lower().startswith("https://"):
+            raise RazorpayConfigurationError(
+                "Live Razorpay API requests require a secure HTTPS base URL."
+            )
+
     @property
     def dry_run(self) -> bool:
         """True if adapter is operating in safe dry-run / simulation mode."""
@@ -153,6 +158,11 @@ class RazorpayAdapter:
             }
 
         # Live Execution
+        if not self._base_url.lower().startswith("https://"):
+            raise RazorpayConfigurationError(
+                "Live Razorpay API requests require a secure HTTPS base URL."
+            )
+
         if not self._key_id or not self._key_secret:
             raise RazorpayConfigurationError(
                 "Razorpay API credentials ('RAZORPAY_KEY_ID' and 'RAZORPAY_KEY_SECRET') "
@@ -220,7 +230,24 @@ class RazorpayAdapter:
                     )
                 raise RazorpayAPIError(error_msg, status_code=response.status_code)
 
-            data = response.json()
+            try:
+                data = response.json()
+            except ValueError as exc:
+                logger.error(
+                    "Failed to parse JSON response from Razorpay API with status %s",
+                    response.status_code,
+                )
+                raise RazorpayAPIError(
+                    f"Invalid JSON payload returned from Razorpay API (status {response.status_code})",
+                    status_code=response.status_code,
+                ) from exc
+
+            if not isinstance(data, dict):
+                raise RazorpayAPIError(
+                    f"Unexpected response structure from Razorpay API: expected dict, got {type(data).__name__}",
+                    status_code=response.status_code,
+                )
+
             return {
                 "id": data.get("id"),
                 "short_url": data.get("short_url"),

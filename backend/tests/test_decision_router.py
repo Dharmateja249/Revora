@@ -15,6 +15,7 @@ Tests:
 """
 
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 from fastapi import status
 from fastapi.testclient import TestClient
@@ -30,6 +31,9 @@ from app.recovery_decision_service import (
 )
 
 client = TestClient(app)
+
+TEST_CUSTOMER_ID = uuid4()
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_CUSTOMER_ID}"}
 
 
 # ============================================================================
@@ -61,6 +65,7 @@ def test_recovery_decision_success():
         "failure_reason": "bank_technical_timeout",
         "payment_status": "failed",
         "customer": {
+            "customer_id": str(TEST_CUSTOMER_ID),
             "total_payments": 10,
             "successful_payments": 9,
             "failed_payments": 1,
@@ -71,7 +76,7 @@ def test_recovery_decision_success():
         "max_attempts": 3,
     }
 
-    response = client.post("/api/recovery/decision", json=payload)
+    response = client.post("/api/recovery/decision", json=payload, headers=AUTH_HEADERS)
     assert response.status_code == status.HTTP_200_OK
 
     data = response.json()
@@ -88,15 +93,12 @@ def test_recovery_decision_success():
     assert data["is_fallback"] is False
     assert data["fallback_reason"] is None
 
-    # Verify action execution telemetry
-    assert "execution" in data
-    assert data["execution"] is not None
-    assert data["execution"]["action"] == data["recommended_action"]
-    assert data["execution"]["status"] in ("skipped", "simulated", "success")
+    # Opt-in invariant: execute_action omitted defaults to False -> execution is None
+    assert data["execution"] is None
 
 
 def test_recovery_decision_payment_link_execution():
-    """Verify approved PAYMENT_LINK recommendation executes via RazorpayAdapter."""
+    """Verify approved PAYMENT_LINK recommendation executes when execute_action=True."""
     stub_recommendation = LLMRecoveryRecommendation(
         recommended_action=RecoveryAction.PAYMENT_LINK,
         confidence=0.92,
@@ -116,7 +118,9 @@ def test_recovery_decision_payment_link_execution():
             "failure_reason": "bank_timeout",
             "execute_action": True,
         }
-        response = client.post("/api/recovery/decision", json=payload)
+        response = client.post(
+            "/api/recovery/decision", json=payload, headers=AUTH_HEADERS
+        )
         assert response.status_code == status.HTTP_200_OK
 
         data = response.json()
@@ -135,7 +139,7 @@ def test_recovery_decision_payment_link_execution():
 
 
 def test_recovery_decision_execute_action_flag_false():
-    """Verify that when execute_action is False, decision is returned without executing action."""
+    """Verify that when execute_action is explicitly False, action is not executed."""
     payload = {
         "amount": 1000.0,
         "currency": "INR",
@@ -143,7 +147,7 @@ def test_recovery_decision_execute_action_flag_false():
         "failure_reason": "bank_timeout",
         "execute_action": False,
     }
-    response = client.post("/api/recovery/decision", json=payload)
+    response = client.post("/api/recovery/decision", json=payload, headers=AUTH_HEADERS)
     assert response.status_code == status.HTTP_200_OK
 
     data = response.json()
@@ -161,6 +165,7 @@ def test_recovery_decision_missing_required_fields():
     res1 = client.post(
         "/api/recovery/decision",
         json={"payment_method": "upi", "failure_reason": "timeout"},
+        headers=AUTH_HEADERS,
     )
     assert res1.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
@@ -168,6 +173,7 @@ def test_recovery_decision_missing_required_fields():
     res2 = client.post(
         "/api/recovery/decision",
         json={"amount": 100.0, "failure_reason": "timeout"},
+        headers=AUTH_HEADERS,
     )
     assert res2.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
@@ -175,6 +181,7 @@ def test_recovery_decision_missing_required_fields():
     res3 = client.post(
         "/api/recovery/decision",
         json={"amount": 100.0, "payment_method": "card"},
+        headers=AUTH_HEADERS,
     )
     assert res3.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
@@ -184,12 +191,14 @@ def test_recovery_decision_invalid_amount():
     res_zero = client.post(
         "/api/recovery/decision",
         json={"amount": 0.0, "payment_method": "card", "failure_reason": "timeout"},
+        headers=AUTH_HEADERS,
     )
     assert res_zero.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
     res_neg = client.post(
         "/api/recovery/decision",
         json={"amount": -50.0, "payment_method": "card", "failure_reason": "timeout"},
+        headers=AUTH_HEADERS,
     )
     assert res_neg.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
@@ -202,7 +211,7 @@ def test_recovery_decision_extra_fields_forbidden():
         "failure_reason": "timeout",
         "unauthorized_field": "injected_data",
     }
-    response = client.post("/api/recovery/decision", json=payload)
+    response = client.post("/api/recovery/decision", json=payload, headers=AUTH_HEADERS)
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
 
@@ -233,7 +242,9 @@ def test_recovery_decision_fallback_on_provider_failure():
             "payment_method": "upi",
             "failure_reason": "gateway_timeout",
         }
-        response = client.post("/api/recovery/decision", json=payload)
+        response = client.post(
+            "/api/recovery/decision", json=payload, headers=AUTH_HEADERS
+        )
         assert response.status_code == status.HTTP_200_OK
 
         data = response.json()
@@ -275,8 +286,11 @@ def test_recovery_decision_policy_override():
             "currency": "INR",
             "payment_method": "card",
             "failure_reason": "customer_auth_failed_otp_timeout",
+            "execute_action": True,
         }
-        response = client.post("/api/recovery/decision", json=payload)
+        response = client.post(
+            "/api/recovery/decision", json=payload, headers=AUTH_HEADERS
+        )
         assert response.status_code == status.HTTP_200_OK
 
         data = response.json()
@@ -318,7 +332,7 @@ def test_recovery_decision_with_previous_attempts():
         "max_attempts": 3,
     }
 
-    response = client.post("/api/recovery/decision", json=payload)
+    response = client.post("/api/recovery/decision", json=payload, headers=AUTH_HEADERS)
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
     assert data["recommended_action"] in [a.value for a in RecoveryAction]
@@ -344,7 +358,9 @@ def test_recovery_decision_unexpected_error_masks_details():
             "payment_method": "card",
             "failure_reason": "internal_error",
         }
-        response = client.post("/api/recovery/decision", json=payload)
+        response = client.post(
+            "/api/recovery/decision", json=payload, headers=AUTH_HEADERS
+        )
         assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
 
         data = response.json()
@@ -393,7 +409,9 @@ def test_recovery_decision_reports_execution_failure():
             "failure_reason": "bank_timeout",
             "execute_action": True,
         }
-        response = client.post("/api/recovery/decision", json=payload)
+        response = client.post(
+            "/api/recovery/decision", json=payload, headers=AUTH_HEADERS
+        )
         assert response.status_code == status.HTTP_200_OK
 
         data = response.json()
@@ -403,5 +421,90 @@ def test_recovery_decision_reports_execution_failure():
         assert data["execution"]["success"] is False
         assert data["execution"]["status"] == "failed"
         assert "502 Bad Gateway" in data["execution"]["error"]
+    finally:
+        app.dependency_overrides.pop(get_recovery_decision_service, None)
+
+
+# ============================================================================
+# 8. Authentication and Authorization Security Tests
+# ============================================================================
+
+
+def test_recovery_decision_unauthenticated_returns_401():
+    """Verify that requests without Authorization header are rejected with 401."""
+    mock_service = MagicMock(spec=RecoveryDecisionService)
+    mock_service.evaluate_decision = AsyncMock()
+    app.dependency_overrides[get_recovery_decision_service] = lambda: mock_service
+
+    try:
+        payload = {
+            "amount": 1000.0,
+            "currency": "INR",
+            "payment_method": "upi",
+            "failure_reason": "timeout",
+            "execute_action": True,
+        }
+        response = client.post("/api/recovery/decision", json=payload)
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert (
+            "Authentication credentials were not provided" in response.json()["detail"]
+        )
+        mock_service.evaluate_decision.assert_not_called()
+    finally:
+        app.dependency_overrides.pop(get_recovery_decision_service, None)
+
+
+def test_recovery_decision_invalid_bearer_token_returns_401():
+    """Verify that invalid/malformed Bearer tokens are rejected with 401."""
+    mock_service = MagicMock(spec=RecoveryDecisionService)
+    mock_service.evaluate_decision = AsyncMock()
+    app.dependency_overrides[get_recovery_decision_service] = lambda: mock_service
+
+    try:
+        payload = {
+            "amount": 1000.0,
+            "currency": "INR",
+            "payment_method": "upi",
+            "failure_reason": "timeout",
+            "execute_action": True,
+        }
+        response = client.post(
+            "/api/recovery/decision",
+            json=payload,
+            headers={"Authorization": "Bearer not-a-valid-uuid"},
+        )
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert "must represent a valid customer UUID" in response.json()["detail"]
+        mock_service.evaluate_decision.assert_not_called()
+    finally:
+        app.dependency_overrides.pop(get_recovery_decision_service, None)
+
+
+def test_recovery_decision_cross_customer_forbidden_returns_403():
+    """Verify that authenticated principal cannot request recovery for another customer."""
+    mock_service = MagicMock(spec=RecoveryDecisionService)
+    mock_service.evaluate_decision = AsyncMock()
+    app.dependency_overrides[get_recovery_decision_service] = lambda: mock_service
+
+    other_customer_id = uuid4()
+    try:
+        payload = {
+            "amount": 1000.0,
+            "currency": "INR",
+            "payment_method": "upi",
+            "failure_reason": "timeout",
+            "customer": {
+                "customer_id": str(other_customer_id),
+            },
+            "execute_action": True,
+        }
+        response = client.post(
+            "/api/recovery/decision",
+            json=payload,
+            headers=AUTH_HEADERS,
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert "Cross-tenant access forbidden" in response.json()["detail"]
+        mock_service.evaluate_decision.assert_not_called()
     finally:
         app.dependency_overrides.pop(get_recovery_decision_service, None)

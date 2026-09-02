@@ -131,16 +131,33 @@ class ActionExecutor:
             customer_email = context.customer.email
 
         # 3. Dispatch to Supported Action Handlers
-        if approved_action == RecoveryAction.PAYMENT_LINK:
-            return await self._execute_payment_link(
-                amount=amount,
-                currency=currency,
-                customer_name=customer_name,
-                customer_email=customer_email,
-                description=f"Payment recovery for failed {payment_method.upper()} payment",
-            )
+        if approved_action in (
+            RecoveryAction.PAYMENT_LINK,
+            RecoveryAction.CHANGE_PAYMENT_METHOD,
+        ):
+            if amount <= 0.0:
+                logger.warning(
+                    "Execution rejected: Cannot create payment link for non-positive amount %s",
+                    amount,
+                )
+                return ActionResult(
+                    action=approved_action,
+                    attempted=False,
+                    status="failed",
+                    success=False,
+                    error=f"Invalid recovery payment amount: {amount}. Amount must be positive.",
+                    message="Payment link creation rejected due to invalid or non-positive amount.",
+                )
 
-        if approved_action == RecoveryAction.CHANGE_PAYMENT_METHOD:
+            if approved_action == RecoveryAction.PAYMENT_LINK:
+                return await self._execute_payment_link(
+                    amount=amount,
+                    currency=currency,
+                    customer_name=customer_name,
+                    customer_email=customer_email,
+                    description=f"Payment recovery for failed {payment_method.upper()} payment",
+                )
+
             return await self._execute_payment_link(
                 amount=amount,
                 currency=currency,

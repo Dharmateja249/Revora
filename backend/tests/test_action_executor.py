@@ -12,6 +12,7 @@ Verifies:
 8. WAIT_AND_RETRY and NO_ACTION are safely marked skipped without external gateway calls.
 """
 
+import re
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -139,7 +140,12 @@ async def test_razorpay_adapter_live_missing_credentials_raises_error():
     """Verify live mode without credentials raises RazorpayConfigurationError."""
     adapter = RazorpayAdapter(key_id=None, key_secret=None, dry_run=False)
 
-    with pytest.raises(RazorpayConfigurationError, match="Razorpay API credentials"):
+    with pytest.raises(
+        RazorpayConfigurationError,
+        match=re.escape(
+            "Razorpay API credentials ('RAZORPAY_KEY_ID' and 'RAZORPAY_KEY_SECRET') must be configured for live payment link creation."
+        ),
+    ):
         await adapter.create_payment_link(amount=500.0)
 
 
@@ -205,8 +211,76 @@ async def test_razorpay_adapter_live_http_error_handled_cleanly():
         client=mock_client,
     )
 
-    with pytest.raises(RazorpayAPIError, match="Amount must be at least ₹1.00"):
+    with pytest.raises(
+        RazorpayAPIError, match=re.escape("Amount must be at least ₹1.00")
+    ):
         await adapter.create_payment_link(amount=0.50)
+
+
+@pytest.mark.anyio
+async def test_razorpay_adapter_live_invalid_json_raises_razorpay_api_error():
+    """Verify that a 2xx response with invalid/corrupt JSON is safely mapped to RazorpayAPIError."""
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.side_effect = ValueError("Invalid JSON response payload")
+    mock_client.post.return_value = mock_response
+
+    adapter = RazorpayAdapter(
+        key_id="rzp_test_key123",
+        key_secret="rzp_test_sec456",
+        dry_run=False,
+        client=mock_client,
+    )
+
+    with pytest.raises(
+        RazorpayAPIError,
+        match=re.escape("Invalid JSON payload returned from Razorpay API (status 200)"),
+    ) as exc_info:
+        await adapter.create_payment_link(amount=100.0)
+
+    assert exc_info.value.status_code == 200
+
+
+def test_razorpay_adapter_accepts_default_and_custom_https_url():
+    """Verify default and custom HTTPS URLs are accepted for live mode."""
+    adapter_default = RazorpayAdapter(key_id="k", key_secret="s", dry_run=False)
+    assert adapter_default.base_url == "https://api.razorpay.com/v1"
+
+    adapter_custom = RazorpayAdapter(
+        key_id="k",
+        key_secret="s",
+        base_url="https://api.custom-gateway.internal/v1",
+        dry_run=False,
+    )
+    assert adapter_custom.base_url == "https://api.custom-gateway.internal/v1"
+
+
+def test_razorpay_adapter_rejects_http_url_for_live_requests():
+    """Verify non-HTTPS URLs are rejected before live requests can be dispatched."""
+    with pytest.raises(
+        RazorpayConfigurationError,
+        match=re.escape("Live Razorpay API requests require a secure HTTPS base URL."),
+    ):
+        RazorpayAdapter(
+            key_id="k",
+            key_secret="s",
+            base_url="http://api.insecure-gateway.com/v1",
+            dry_run=False,
+        )
+
+
+@pytest.mark.anyio
+async def test_razorpay_adapter_dry_run_unaffected_by_http_url():
+    """Verify dry_run mode functions normally even if base_url is HTTP for local dev."""
+    adapter = RazorpayAdapter(
+        base_url="http://localhost:8000/mock-razorpay",
+        dry_run=True,
+    )
+    assert adapter.dry_run is True
+    res = await adapter.create_payment_link(amount=100.0)
+    assert res["simulated"] is True
+    assert res["id"].startswith("plink_sim_")
 
 
 def test_razorpay_adapter_repr_masks_secret():
@@ -243,6 +317,76 @@ async def test_action_executor_payment_link_success(
     assert result.reference_id.startswith("plink_sim_")
     assert result.resource_url is not None
     assert "https://rzp.io/i/" in result.resource_url
+
+
+@pytest.mark.anyio
+async def test_action_executor_rejects_none_current_payment(
+    sample_customer_context, permissive_policy_context
+):
+    """Verify ActionExecutor rejects payment link when current_payment is None without calling adapter."""
+    mock_adapter = MagicMock(spec=RazorpayAdapter)
+    mock_adapter.create_payment_link = AsyncMock()
+    executor = ActionExecutor(razorpay_adapter=mock_adapter)
+
+    # Set current_payment to None
+    context_no_payment = CustomerRecoveryContext(
+        customer=sample_customer_context.customer,
+        current_payment=None,
+        current_opportunity=sample_customer_context.current_opportunity,
+    )
+
+    result = await executor.execute(
+        approved_action=RecoveryAction.PAYMENT_LINK,
+        policy_context=permissive_policy_context,
+        context=context_no_payment,
+    )
+
+    assert result.action == RecoveryAction.PAYMENT_LINK
+    assert result.attempted is False
+    assert result.status == "failed"
+    assert result.success is False
+    assert "Amount must be positive" in result.error
+    mock_adapter.create_payment_link.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("invalid_amount", [0.0, -1.0, -500.25])
+async def test_action_executor_rejects_non_positive_payment_amount(
+    sample_customer_context, permissive_policy_context, invalid_amount: float
+):
+    """Verify ActionExecutor rejects zero and negative amounts for both PAYMENT_LINK and CHANGE_PAYMENT_METHOD."""
+    mock_adapter = MagicMock(spec=RazorpayAdapter)
+    mock_adapter.create_payment_link = AsyncMock()
+    executor = ActionExecutor(razorpay_adapter=mock_adapter)
+
+    # Use model_construct to test zero and any negative amounts that might reach this layer
+    payment = PaymentContext.model_construct(
+        payment_id=uuid4(),
+        amount=invalid_amount,
+        currency="INR",
+        payment_method="card",
+        status="failed",
+        failure_reason="timeout",
+    )
+    context_invalid_amount = CustomerRecoveryContext(
+        customer=sample_customer_context.customer,
+        current_payment=payment,
+        current_opportunity=sample_customer_context.current_opportunity,
+    )
+
+    for action in (RecoveryAction.PAYMENT_LINK, RecoveryAction.CHANGE_PAYMENT_METHOD):
+        result = await executor.execute(
+            approved_action=action,
+            policy_context=permissive_policy_context,
+            context=context_invalid_amount,
+        )
+
+        assert result.action == action
+        assert result.attempted is False
+        assert result.status == "failed"
+        assert result.success is False
+        assert f"Invalid recovery payment amount: {invalid_amount}" in result.error
+        mock_adapter.create_payment_link.assert_not_called()
 
 
 @pytest.mark.anyio

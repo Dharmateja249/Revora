@@ -89,6 +89,7 @@ adaptive-recovery agent/
    ```bash
    curl -X POST http://localhost:8000/api/recovery/decision \
      -H "Content-Type: application/json" \
+     -H "Authorization: Bearer 00000000-0000-0000-0000-000000000001" \
      -d '{
        "amount": 2500.0,
        "currency": "INR",
@@ -99,6 +100,8 @@ adaptive-recovery agent/
        "max_attempts": 3
      }'
    ```
+
+   > **Note**: `execute_action` is opt-in (defaults to `false`). Set `"execute_action": true` to dispatch external recovery action execution.
 
    Response:
    ```json
