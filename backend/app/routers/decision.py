@@ -10,6 +10,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from app.auth import (
     AuthenticatedPrincipal,
@@ -18,6 +19,7 @@ from app.auth import (
     is_known_demo_customer,
 )
 from app.config import Settings, get_settings
+from app.database import get_db
 from app.recovery_decision_service import (
     RecoveryDecisionService,
     get_recovery_decision_service,
@@ -90,12 +92,13 @@ async def evaluate_recovery_decision(
     request: RecoveryDecisionRequest,
     principal: AuthenticatedPrincipal = Depends(get_current_principal),  # noqa: B008
     service: RecoveryDecisionService = Depends(get_recovery_decision_service),  # noqa: B008
+    db: Session = Depends(get_db),  # noqa: B008
 ) -> RecoveryDecisionResponse:
     """
     Evaluate recovery decision for a failed payment.
 
     Requires valid caller authentication. Enforces tenant authorization if customer_id is provided.
-    Validates request payload, invokes application service orchestration,
+    Validates request payload, invokes application service orchestration with database context,
     and returns sanitized decision telemetry without internal database coupling or secrets.
     """
     if (
@@ -110,7 +113,7 @@ async def evaluate_recovery_decision(
     if request.customer.customer_id is None:
         request.customer.customer_id = principal.customer_id
     try:
-        return await service.evaluate_decision(request)
+        return await service.evaluate_decision(request, db_session=db)
     except HTTPException:
         raise
     except ValueError as exc:

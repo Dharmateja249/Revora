@@ -170,6 +170,9 @@ class RecoveryAttempt(Base):
     external_reference: Mapped[str | None] = mapped_column(
         String(255), unique=True, nullable=True, index=True
     )
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(255), unique=True, nullable=True, index=True
+    )
     error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False

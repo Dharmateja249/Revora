@@ -7,7 +7,7 @@ immutable AgentDecisionResult outcome.
 """
 
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from app.agent.context_builder import AgentContextBuilder
 from app.agent.factory import create_llm_provider
@@ -175,7 +175,43 @@ class AgentOrchestrator:
                 latency_ms=elapsed_ms,
             )
 
-        # 4. Enforce deterministic policy validation on candidate action
+        # 4. Resolve and reconcile referenced_case_ids against actual retrieved cases
+        retrieved_case_ids: tuple[str, ...] = tuple(
+            str(c["case_id"])
+            for c in prompt_context.historical_cases
+            if isinstance(c, (dict, Mapping)) and "case_id" in c
+        )
+
+        if historical_cases is not None:
+            if not retrieved_case_ids:
+                # Zero historical cases were retrieved; ensure referenced_case_ids is empty
+                if raw_recommendation.referenced_case_ids:
+                    raw_recommendation = LLMRecoveryRecommendation(
+                        recommended_action=raw_recommendation.recommended_action,
+                        confidence=raw_recommendation.confidence,
+                        reasoning=raw_recommendation.reasoning,
+                        key_factors=raw_recommendation.key_factors,
+                        referenced_case_ids=(),
+                    )
+            else:
+                matching_ids = tuple(
+                    cid
+                    for cid in raw_recommendation.referenced_case_ids
+                    if cid in retrieved_case_ids
+                )
+                effective_refs = (
+                    matching_ids if matching_ids else retrieved_case_ids[:3]
+                )
+                if effective_refs != raw_recommendation.referenced_case_ids:
+                    raw_recommendation = LLMRecoveryRecommendation(
+                        recommended_action=raw_recommendation.recommended_action,
+                        confidence=raw_recommendation.confidence,
+                        reasoning=raw_recommendation.reasoning,
+                        key_factors=raw_recommendation.key_factors,
+                        referenced_case_ids=effective_refs,
+                    )
+
+        # 5. Enforce deterministic policy validation on candidate action
         validation_result: PolicyValidationResult = (
             self._policy_validator.validate_decision(
                 candidate_action=raw_recommendation.recommended_action,
@@ -204,7 +240,7 @@ class AgentOrchestrator:
                 },
             )
 
-        # 5. Policy violation override (Deterministic policy enforcement; LLM was used)
+        # 6. Policy violation override (Deterministic policy enforcement; LLM was used)
         effective_recommendation = LLMRecoveryRecommendation(
             recommended_action=validation_result.effective_action,
             confidence=raw_recommendation.confidence,

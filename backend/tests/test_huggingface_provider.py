@@ -23,14 +23,6 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from huggingface_hub import AsyncInferenceClient
-from huggingface_hub.errors import (
-    HfHubHTTPError,
-    InferenceEndpointError,
-    InferenceTimeoutError,
-    OverloadedError,
-)
-
 from app.agent.context_builder import AgentContextBuilder
 from app.agent.factory import create_llm_provider
 from app.agent.huggingface_provider import HuggingFaceLLMProvider
@@ -56,6 +48,13 @@ from app.decision_engine import RecoveryAction
 from app.historical_retrieval import HistoricalCase
 from app.policies.registry import RZP_CUSTOMER_AUTH_2FA_REQUIRED_RULE
 from app.policies.schemas import RecoveryPolicyContext
+from huggingface_hub import AsyncInferenceClient
+from huggingface_hub.errors import (
+    HfHubHTTPError,
+    InferenceEndpointError,
+    InferenceTimeoutError,
+    OverloadedError,
+)
 
 # ============================================================================
 # Helpers

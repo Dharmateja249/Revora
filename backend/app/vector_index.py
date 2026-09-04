@@ -100,6 +100,10 @@ class VectorIndex:
     def __len__(self) -> int:
         return self.size
 
+    def get_all_documents(self) -> list[RetrievalDocument]:
+        """Return all indexed RetrievalDocuments in order of addition."""
+        return [doc for _, doc in self._entries.values()]
+
     def _validate_vector(self, vector: Sequence[float]) -> tuple[float, ...]:
         """Validate vector numeric integrity and dimension consistency."""
         if not isinstance(vector, (list, tuple)):

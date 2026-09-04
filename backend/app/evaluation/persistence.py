@@ -51,12 +51,12 @@ def _atomic_write_json(file_path: Path, data: dict[str, Any]) -> None:
     except Exception:
         try:
             temp_file.close()
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
         if os.path.exists(temp_file.name):
             try:
                 os.remove(temp_file.name)
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
         raise
 

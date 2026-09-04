@@ -140,6 +140,29 @@ def resolve_policy_context(
             metadata={"resolved_by": "SafetyMaxAttemptsExceeded"},
         )
 
+    fraud_rule = reg.get_rule("SAFETY_FRAUD_SECURITY_DECLINE")
+    if fraud_rule and _matches_failure_reason(
+        fraud_rule.applicable_failure_reasons, current_payment.failure_reason
+    ):
+        applicable_rules.append(fraud_rule)
+        return RecoveryPolicyContext(
+            provider=provider,
+            policy_version=reg.version,
+            applicable_rules=tuple(applicable_rules),
+            allowed_actions=(RecoveryAction.NO_ACTION,),
+            prohibited_actions=(
+                RecoveryAction.RETRY_PAYMENT,
+                RecoveryAction.WAIT_AND_RETRY,
+                RecoveryAction.PAYMENT_LINK,
+                RecoveryAction.CHANGE_PAYMENT_METHOD,
+            ),
+            mandatory_fallback_action=RecoveryAction.NO_ACTION,
+            metadata={
+                "resolved_by": "SafetyFraudSecurityDecline",
+                "primary_rule_id": fraud_rule.policy_id,
+            },
+        )
+
     # =========================================================================
     # Phase 2: Domain Rule Matching (Provider Constraints & Business Rules)
     # =========================================================================

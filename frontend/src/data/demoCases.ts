@@ -11,6 +11,7 @@ export const DEMO_PAYMENT_CASES: DemoPaymentCase[] = [
     description: "Card payment failed due to 3D-Secure 2FA OTP timeout. High-value enterprise account.",
     timestamp: "2 mins ago",
     requestPayload: {
+      payment_id: "c0000001-0000-4000-8000-000000000001",
       amount: 8450.0,
       currency: "INR",
       payment_method: "card",
@@ -40,6 +41,7 @@ export const DEMO_PAYMENT_CASES: DemoPaymentCase[] = [
     description: "UPI transaction timed out at issuing bank gateway during peak checkout hours.",
     timestamp: "8 mins ago",
     requestPayload: {
+      payment_id: "c0000002-0000-4000-8000-000000000002",
       amount: 3200.0,
       currency: "INR",
       payment_method: "upi",
@@ -69,6 +71,7 @@ export const DEMO_PAYMENT_CASES: DemoPaymentCase[] = [
     description: "Card limit exceeded on primary credit card. Automated retry failed with insufficient funds.",
     timestamp: "24 mins ago",
     requestPayload: {
+      payment_id: "c0000003-0000-4000-8000-000000000003",
       amount: 14999.0,
       currency: "INR",
       payment_method: "card",
@@ -105,6 +108,7 @@ export const DEMO_PAYMENT_CASES: DemoPaymentCase[] = [
     description: "Subscription recurring billing failed: mandate authorization expired on customer card.",
     timestamp: "45 mins ago",
     requestPayload: {
+      payment_id: "c0000004-0000-4000-8000-000000000004",
       amount: 24500.0,
       currency: "INR",
       payment_method: "card",
@@ -134,6 +138,7 @@ export const DEMO_PAYMENT_CASES: DemoPaymentCase[] = [
     description: "High-risk transaction flagged by gateway fraud shield. Zero historical trust baseline.",
     timestamp: "1 hour ago",
     requestPayload: {
+      payment_id: "c0000005-0000-4000-8000-000000000005",
       amount: 49999.0,
       currency: "INR",
       payment_method: "card",

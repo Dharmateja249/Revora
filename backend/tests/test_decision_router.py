@@ -17,9 +17,6 @@ Tests:
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
-from fastapi import status
-from fastapi.testclient import TestClient
-
 from app.agent.orchestrator import AgentOrchestrator
 from app.agent.provider import LLMProviderError, MockLLMProvider
 from app.agent.schemas import LLMRecoveryRecommendation
@@ -31,6 +28,8 @@ from app.recovery_decision_service import (
     get_recovery_decision_service,
 )
 from app.schemas.decision import RecoveryDecisionResponse
+from fastapi import status
+from fastapi.testclient import TestClient
 
 client = TestClient(app)
 
@@ -143,6 +142,8 @@ def test_recovery_decision_payment_link_execution():
         assert "plink_" in data["execution"]["reference_id"]
         assert data["execution"]["resource_url"] is not None
         assert "https://rzp.io/i/" in data["execution"]["resource_url"]
+        assert data["execution"]["persisted"] is True
+        assert data["execution"]["persistence_error"] is None
     finally:
         app.dependency_overrides.pop(get_recovery_decision_service, None)
 
@@ -430,8 +431,109 @@ def test_recovery_decision_reports_execution_failure():
         assert data["execution"]["success"] is False
         assert data["execution"]["status"] == "failed"
         assert "502 Bad Gateway" in data["execution"]["error"]
+        assert data["execution"]["persisted"] is True
+        assert data["execution"]["persistence_error"] is None
     finally:
         app.dependency_overrides.pop(get_recovery_decision_service, None)
+
+
+def test_recovery_decision_api_db_persistence_failure_marks_unpersisted_and_masks_error():
+    """Verify that when DB persistence fails during live execution, API returns 200 with persisted=False and masked error."""
+    from app.action_executor import ActionExecutor
+    from app.context_retrieval import ensure_demo_customer_seeded
+    from app.database import SessionLocal, get_db
+    from app.razorpay_adapter import RazorpayAdapter
+
+    # Razorpay succeeds
+    mock_adapter = MagicMock(spec=RazorpayAdapter)
+    mock_adapter.create_payment_link = AsyncMock(
+        return_value={
+            "id": "plink_api_db_fail_111",
+            "short_url": "https://rzp.io/i/api_db_fail_111",
+            "amount": 250000,
+            "currency": "INR",
+            "status": "created",
+            "description": "Payment recovery",
+        }
+    )
+    mock_adapter.dry_run = False
+    executor = ActionExecutor(razorpay_adapter=mock_adapter)
+
+    provider = MockLLMProvider(
+        recommendation=LLMRecoveryRecommendation(
+            recommended_action=RecoveryAction.PAYMENT_LINK,
+            confidence=0.9,
+            reasoning="Payment link needed.",
+        )
+    )
+    orchestrator = AgentOrchestrator(provider=provider)
+    service = RecoveryDecisionService(
+        agent_orchestrator=orchestrator,
+        action_executor=executor,
+    )
+
+    rollback_called = False
+
+    def failing_db_generator():
+        nonlocal rollback_called
+        db = SessionLocal()
+        ensure_demo_customer_seeded(db)
+        real_rollback = db.rollback
+
+        def tracked_rollback():
+            nonlocal rollback_called
+            rollback_called = True
+            return real_rollback()
+
+        def failing_commit():
+            raise RuntimeError(
+                "FATAL: internal SQLite deadlock on revora.db table 'payments'"
+            )
+
+        db.commit = failing_commit
+        db.rollback = tracked_rollback
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_recovery_decision_service] = lambda: service
+    app.dependency_overrides[get_db] = failing_db_generator
+    try:
+        payload = {
+            "amount": 2500.0,
+            "currency": "INR",
+            "payment_method": "card",
+            "failure_reason": "customer_auth_failed_otp_timeout",
+            "execute_action": True,
+        }
+        response = client.post(
+            "/api/recovery/decision", json=payload, headers=AUTH_HEADERS
+        )
+        assert response.status_code == status.HTTP_200_OK
+
+        data = response.json()
+        assert data["execution"] is not None
+        assert data["execution"]["success"] is True
+        assert data["execution"]["reference_id"] == "plink_api_db_fail_111"
+        assert data["execution"]["resource_url"] == "https://rzp.io/i/api_db_fail_111"
+
+        # Persistence failure flagged
+        assert data["execution"]["persisted"] is False
+        assert (
+            data["execution"]["persistence_error"]
+            == "Recovery outcome could not be persisted; reconciliation required."
+        )
+
+        # Ensure no sensitive database details are in the response
+        assert "FATAL" not in response.text
+        assert "SQLite" not in response.text
+        assert "revora.db" not in response.text
+        assert "deadlock" not in response.text
+        assert rollback_called is True
+    finally:
+        app.dependency_overrides.pop(get_recovery_decision_service, None)
+        app.dependency_overrides.pop(get_db, None)
 
 
 # ============================================================================

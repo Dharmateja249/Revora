@@ -1,4 +1,5 @@
 import {
+  AuthTokenResponse,
   HealthCheckResponse,
   RecoveryDecisionRequest,
   RecoveryDecisionResponse,
@@ -11,6 +12,14 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 const DEFAULT_AUTH_CUSTOMER_ID =
   import.meta.env.VITE_DEMO_CUSTOMER_ID || "e9cd4c97-979b-4753-9925-640623f74eee";
 
+interface CachedToken {
+  token: string;
+  expiresAt: number; // Timestamp in milliseconds
+}
+
+// In-memory token cache (customerId -> CachedToken) strictly isolated from local/sessionStorage
+const tokenCache = new Map<string, CachedToken>();
+
 export class ApiError extends Error {
   status: number;
   detail: string;
@@ -20,6 +29,86 @@ export class ApiError extends Error {
     this.status = status;
     this.detail = detail;
     this.name = "ApiError";
+  }
+}
+
+/**
+ * Clears the in-memory demo authentication token cache.
+ */
+export function clearAuthTokenCache(): void {
+  tokenCache.clear();
+}
+
+/**
+ * Requests a cryptographically verifiable demo authentication token for a customer UUID.
+ * Tokens are cached in-memory until near expiration to avoid redundant requests.
+ *
+ * @param customerId Customer UUID to bind to the authentication token
+ * @returns Cryptographically verifiable access token string
+ */
+export async function fetchCustomerAuthToken(customerId: string): Promise<string> {
+  const normalizedId = (customerId || "").trim();
+  if (!normalizedId) {
+    throw new ApiError(400, "A valid customer UUID is required to obtain an authentication token.");
+  }
+
+  // Check in-memory cache (with a 60-second safety window before expiration)
+  const cached = tokenCache.get(normalizedId);
+  if (cached && cached.expiresAt > Date.now() + 60_000) {
+    return cached.token;
+  }
+
+  const url = `${API_BASE_URL}/api/auth/token`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ customer_id: normalizedId }),
+    });
+
+    if (!res.ok) {
+      let detail = `Failed to obtain authentication token (HTTP ${res.status})`;
+      try {
+        const errorData = await res.json();
+        if (errorData && typeof errorData === "object") {
+          if (typeof errorData.detail === "string") {
+            detail = errorData.detail;
+          } else if (Array.isArray(errorData.detail)) {
+            detail = errorData.detail
+              .map((d: { msg?: string; loc?: string[] }) => d.msg || JSON.stringify(d))
+              .join("; ");
+          }
+        }
+      } catch {
+        detail = res.statusText || detail;
+      }
+      throw new ApiError(res.status, detail);
+    }
+
+    const data: AuthTokenResponse = await res.json();
+    if (!data || !data.access_token) {
+      throw new ApiError(500, "Malformed authentication response: missing access_token.");
+    }
+
+    // Cache token in memory; expires_in is in seconds
+    const expiresInMs = (data.expires_in || 86400) * 1000;
+    tokenCache.set(normalizedId, {
+      token: data.access_token,
+      expiresAt: Date.now() + expiresInMs,
+    });
+
+    return data.access_token;
+  } catch (err: unknown) {
+    if (err instanceof ApiError) throw err;
+    throw new ApiError(
+      0,
+      err instanceof Error
+        ? err.message
+        : "Failed to connect to authentication service. Please verify backend status."
+    );
   }
 }
 
@@ -74,13 +163,16 @@ export async function evaluateRecoveryDecision(
     execute_action: Boolean(request.execute_action),
   };
 
+  // Obtain server-issued verifiable token (never send raw customer UUID)
+  const authToken = await fetchCustomerAuthToken(customerId);
+
   try {
     const res = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
-        Authorization: `Bearer ${customerId}`,
+        Authorization: `Bearer ${authToken}`,
       },
       body: JSON.stringify(payload),
     });

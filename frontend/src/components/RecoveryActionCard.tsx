@@ -99,8 +99,18 @@ export const RecoveryActionCard: React.FC<RecoveryActionCardProps> = ({
           </div>
         </div>
 
-        {/* Policy Status Badge */}
+        {/* Policy & Observability Status Badges */}
         <div className="flex items-center gap-2">
+          {decision.request_id && (
+            <span
+              className="hidden sm:inline-block font-mono text-[10px] text-slate-500 bg-slate-800/60 px-2 py-0.5 rounded border border-slate-700/50"
+              title={`Trace ID: ${decision.request_id}`}
+            >
+              {decision.request_id.length > 16
+                ? `${decision.request_id.slice(0, 14)}...`
+                : decision.request_id}
+            </span>
+          )}
           {decision.policy_overridden ? (
             <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-950/80 text-amber-300 border border-amber-800/80 text-xs font-semibold">
               <Lock className="w-3.5 h-3.5" />
@@ -244,14 +254,14 @@ export const RecoveryActionCard: React.FC<RecoveryActionCardProps> = ({
                 </span>
               ))
             ) : (
-              <span className="text-xs text-slate-500">Zero prior precedents required</span>
+              <span className="text-xs text-slate-500">No relevant historical precedents</span>
             )}
           </div>
         </div>
       </div>
 
-      {/* Execution Call to Action: Explicit opt-in execution */}
-      {onExecute && (
+      {/* Execution Call to Action: Explicit opt-in execution (suppressed for non-executable actions such as NO_ACTION) */}
+      {onExecute && actionTheme.executable && (
         <div className="pt-4 border-t border-slate-800 flex flex-wrap items-center justify-between gap-4">
           <div className="text-xs text-slate-400 flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 text-emerald-400" />

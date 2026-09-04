@@ -14,6 +14,7 @@ export const PaymentCaseCard: React.FC<PaymentCaseCardProps> = ({
   isHero = false,
 }) => {
   const req = paymentCase.requestPayload;
+  const attemptCount = paymentCase.attempt_count ?? req.previous_attempts?.length ?? 0;
   const successRate = Math.round((req.customer?.historical_success_rate || 0) * 100);
 
   const getMethodIcon = (method: string) => {
@@ -103,7 +104,7 @@ export const PaymentCaseCard: React.FC<PaymentCaseCardProps> = ({
           <div className="flex items-center gap-1.5 mt-1 text-xs font-semibold text-slate-200">
             <History className="w-3.5 h-3.5 text-slate-400" />
             <span>
-              {req.previous_attempts?.length || 0} / {req.max_attempts || 3} used
+              {attemptCount} / {req.max_attempts || 3} used
             </span>
           </div>
         </div>

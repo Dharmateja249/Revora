@@ -10,7 +10,6 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-
 from app.decision_engine import RecoveryAction
 from app.evaluation.decision_benchmark import run_decision_cli
 from app.evaluation.decision_persistence import (
@@ -21,6 +20,7 @@ from app.evaluation.decision_persistence import (
     save_decision_report,
 )
 from app.evaluation.schemas import DecisionBenchmarkReport, DecisionEvalResult
+
 from tests.fixtures.retrieval_golden_dataset import get_golden_evaluation_cases
 
 

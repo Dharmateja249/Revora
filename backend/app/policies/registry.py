@@ -75,6 +75,33 @@ SAFETY_NO_ACTIVE_OPPORTUNITY_RULE = PolicyRule(
     metadata={"scope": "safety_invariant"},
 )
 
+SAFETY_FRAUD_SECURITY_DECLINE_RULE = PolicyRule(
+    policy_id="SAFETY_FRAUD_SECURITY_DECLINE",
+    provider="razorpay",
+    version=DEFAULT_POLICY_VERSION,
+    policy_type=PolicyType.SAFETY,
+    description="Fraud or hard security decline (fraud_hard_decline, fraud_suspected, risk_threshold_exceeded). All automated retries, payment links, and method changes are strictly prohibited. Terminal stop.",
+    applicable_failure_reasons=(
+        "fraud_hard_decline",
+        "fraud_suspected",
+        "fraudulent",
+        "fraud",
+        "risk_threshold_exceeded",
+        "security_violation",
+    ),
+    applicable_payment_methods=(),
+    allowed_actions=(RecoveryAction.NO_ACTION,),
+    prohibited_actions=(
+        RecoveryAction.RETRY_PAYMENT,
+        RecoveryAction.WAIT_AND_RETRY,
+        RecoveryAction.PAYMENT_LINK,
+        RecoveryAction.CHANGE_PAYMENT_METHOD,
+    ),
+    mandatory_fallback=RecoveryAction.NO_ACTION,
+    priority=1000,
+    metadata={"security_invariant": "zero_tolerance_fraud_stopping"},
+)
+
 
 # ============================================================================
 # 2. VERIFIED PAYMENT PROVIDER CONSTRAINTS (Provider = "razorpay", Priority = 800)
@@ -248,6 +275,7 @@ class PolicyRegistry:
             SAFETY_MAX_ATTEMPTS_RULE,
             SAFETY_ALREADY_RECOVERED_RULE,
             SAFETY_NO_ACTIVE_OPPORTUNITY_RULE,
+            SAFETY_FRAUD_SECURITY_DECLINE_RULE,
             RZP_PERMANENT_CREDENTIAL_ERROR_RULE,
             RZP_CUSTOMER_AUTH_2FA_REQUIRED_RULE,
             REVORA_INSUFFICIENT_FUNDS_RULE,

@@ -6,7 +6,6 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-
 from app.agent.context_builder import AgentContextBuilder
 from app.agent.schemas import AgentDecisionPromptContext
 from app.context import (

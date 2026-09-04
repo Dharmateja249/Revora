@@ -34,6 +34,7 @@ export const RecoveryCase: React.FC<RecoveryCaseProps> = ({
   currentCase,
   onSelectCase,
 }) => {
+  const [activeCase, setActiveCase] = useState<DemoPaymentCase>(currentCase);
   const [pipelineStages, setPipelineStages] = useState<PipelineStage[]>(
     createInitialPipelineStages()
   );
@@ -43,12 +44,53 @@ export const RecoveryCase: React.FC<RecoveryCaseProps> = ({
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Reset state when switching between cases
+  // Sync and hydrate case state from authoritative backend when switching cases or on initial mount
   useEffect(() => {
+    setActiveCase(currentCase);
     setPipelineStages(createInitialPipelineStages());
     setDecision(null);
     setExecution(null);
     setErrorMessage(null);
+
+    // Non-intrusive hydration: retrieve authoritative database state (attempts, customer counters) for stable payment_id
+    let isSubscribed = true;
+    evaluateRecoveryDecision({
+      ...currentCase.requestPayload,
+      execute_action: false,
+    })
+      .then((res) => {
+        if (!isSubscribed) return;
+        setActiveCase((prev) => {
+          const updated: DemoPaymentCase = {
+            ...prev,
+            attempt_count: res.attempt_count ?? res.previous_attempts?.length,
+            requestPayload: {
+              ...prev.requestPayload,
+              payment_id: res.payment_id || prev.requestPayload.payment_id,
+              opportunity_status: res.opportunity_status || prev.requestPayload.opportunity_status,
+              previous_attempts: res.previous_attempts || prev.requestPayload.previous_attempts,
+              customer: res.customer
+                ? {
+                    customer_id: res.customer.customer_id || prev.requestPayload.customer?.customer_id,
+                    total_payments: res.customer.total_payments,
+                    successful_payments: res.customer.successful_payments,
+                    failed_payments: res.customer.failed_payments,
+                    historical_success_rate: res.customer.historical_success_rate,
+                  }
+                : prev.requestPayload.customer,
+            },
+          };
+          onSelectCase(updated);
+          return updated;
+        });
+      })
+      .catch((_err) => {
+        // Hydration failure (e.g. backend not reachable yet) is non-fatal; user can still analyze
+      });
+
+    return () => {
+      isSubscribed = false;
+    };
   }, [currentCase.id]);
 
   /**
@@ -84,16 +126,51 @@ export const RecoveryCase: React.FC<RecoveryCaseProps> = ({
       updateStage("step_2", "completed", "Trust score parsed");
       updateStage("step_3", "processing", "Vector RAG matching...");
 
-      await new Promise((r) => setTimeout(r, 250));
-      updateStage("step_3", "completed", "Precedents found");
+      await new Promise((r) => setTimeout(r, 200));
       updateStage("step_4", "processing", "LLM synthesizing...");
 
       // Call REAL backend API with execute_action: false
       const result = await evaluateRecoveryDecision({
-        ...currentCase.requestPayload,
+        ...activeCase.requestPayload,
         execute_action: false,
       });
 
+      // Synchronize authoritative state from response
+      const updatedAnalyzed: DemoPaymentCase = {
+        ...activeCase,
+        attempt_count: result.attempt_count ?? result.previous_attempts?.length,
+        requestPayload: {
+          ...activeCase.requestPayload,
+          payment_id: result.payment_id || activeCase.requestPayload.payment_id,
+          opportunity_status: result.opportunity_status || activeCase.requestPayload.opportunity_status,
+          previous_attempts: result.previous_attempts || activeCase.requestPayload.previous_attempts,
+          customer: result.customer
+            ? {
+                customer_id: result.customer.customer_id || activeCase.requestPayload.customer?.customer_id,
+                total_payments: result.customer.total_payments,
+                successful_payments: result.customer.successful_payments,
+                failed_payments: result.customer.failed_payments,
+                historical_success_rate: result.customer.historical_success_rate,
+              }
+            : activeCase.requestPayload.customer,
+        },
+      };
+      setActiveCase(updatedAnalyzed);
+      onSelectCase(updatedAnalyzed);
+
+      // Stage 3: Derived dynamically from actual RAG retrieval results
+      const precedentCount = result.referenced_case_ids?.length || 0;
+      if (precedentCount > 0) {
+        updateStage(
+          "step_3",
+          "completed",
+          `${precedentCount} precedent${precedentCount > 1 ? "s" : ""} cited`
+        );
+      } else {
+        updateStage("step_3", "completed", "No relevant historical precedents");
+      }
+
+      // Stage 4: AI Recommendation
       updateStage("step_4", "completed", `${Math.round(result.confidence * 100)}% confidence`);
 
       // Stage 5: Policy Validation
@@ -110,6 +187,7 @@ export const RecoveryCase: React.FC<RecoveryCaseProps> = ({
     } catch (err: unknown) {
       const msg = err instanceof ApiError ? err.detail : "Failed to communicate with Revora decision API.";
       setErrorMessage(msg);
+      updateStage("step_3", "failed", "RAG check incomplete");
       updateStage("step_4", "failed", "Analysis failed");
     } finally {
       setIsAnalyzing(false);
@@ -133,11 +211,34 @@ export const RecoveryCase: React.FC<RecoveryCaseProps> = ({
 
       // Call REAL backend API with execute_action: true
       const result = await evaluateRecoveryDecision({
-        ...currentCase.requestPayload,
+        ...activeCase.requestPayload,
         execute_action: true,
       });
 
       setDecision(result);
+
+      // Synchronize authoritative state from response
+      const updatedExecuted: DemoPaymentCase = {
+        ...activeCase,
+        attempt_count: result.attempt_count ?? result.previous_attempts?.length,
+        requestPayload: {
+          ...activeCase.requestPayload,
+          payment_id: result.payment_id || activeCase.requestPayload.payment_id,
+          opportunity_status: result.opportunity_status || activeCase.requestPayload.opportunity_status,
+          previous_attempts: result.previous_attempts || activeCase.requestPayload.previous_attempts,
+          customer: result.customer
+            ? {
+                customer_id: result.customer.customer_id || activeCase.requestPayload.customer?.customer_id,
+                total_payments: result.customer.total_payments,
+                successful_payments: result.customer.successful_payments,
+                failed_payments: result.customer.failed_payments,
+                historical_success_rate: result.customer.historical_success_rate,
+              }
+            : activeCase.requestPayload.customer,
+        },
+      };
+      setActiveCase(updatedExecuted);
+      onSelectCase(updatedExecuted);
 
       if (result.execution) {
         setExecution(result.execution);
@@ -220,7 +321,7 @@ export const RecoveryCase: React.FC<RecoveryCaseProps> = ({
       )}
 
       {/* Payment Case Details Header */}
-      <PaymentCaseCard paymentCase={currentCase} />
+      <PaymentCaseCard paymentCase={activeCase} />
 
       {/* Autonomous Recovery Pipeline Visualizer */}
       <DecisionPipeline stages={pipelineStages} />

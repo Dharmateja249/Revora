@@ -12,8 +12,6 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
-from pydantic import ValidationError
-
 from app.context import (
     CustomerContext,
     CustomerRecoveryContext,
@@ -28,6 +26,8 @@ from app.evaluation.schemas import (
     EvaluationCase,
     GroundTruthJudgment,
 )
+from pydantic import ValidationError
+
 from tests.fixtures.retrieval_golden_dataset import (
     GOLDEN_EVALUATION_CASES,
     get_golden_evaluation_cases,

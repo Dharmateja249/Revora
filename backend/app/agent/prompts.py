@@ -58,6 +58,7 @@ def build_agent_messages(
     user_payload_dict = {
         "current_payment": context_dict.get("current_payment", {}),
         "customer_recovery_profile": context_dict.get("customer_profile", {}),
+        "recent_payment_behavior": context_dict.get("recent_payment_behavior", []),
         "attempt_budget": context_dict.get("attempt_budget", {}),
         "prior_attempts_on_this_payment": context_dict.get(
             "recovery_attempt_history", []

@@ -25,7 +25,6 @@ from uuid import uuid4
 
 import httpx
 import pytest
-
 from app.agent.context_builder import AgentContextBuilder
 from app.agent.factory import create_llm_provider
 from app.agent.gemini_provider import GeminiLLMProvider

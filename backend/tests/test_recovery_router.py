@@ -25,12 +25,6 @@ import uuid
 from datetime import timedelta
 
 import pytest
-from fastapi import status
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-
 from app.auth import create_access_token
 from app.database import Base, get_db
 from app.decision_engine import RecoveryAction
@@ -44,6 +38,11 @@ from app.schemas.recovery import (
     RecoveryEvaluationResponse,
 )
 from app.vector_index import get_vector_index
+from fastapi import status
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 
 def _auth_headers(cust_id) -> dict[str, str]:

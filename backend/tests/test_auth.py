@@ -13,9 +13,6 @@ Verifies:
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import HTTPException
-from fastapi.security import HTTPAuthorizationCredentials
-
 from app.auth import (
     AuthenticatedPrincipal,
     create_access_token,
@@ -23,6 +20,8 @@ from app.auth import (
     is_known_demo_customer,
     verify_access_token,
 )
+from fastapi import HTTPException
+from fastapi.security import HTTPAuthorizationCredentials
 
 
 def test_create_and_verify_valid_token():

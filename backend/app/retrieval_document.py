@@ -85,6 +85,14 @@ class RetrievalDocument(BaseModel):
     def _serialize_metadata(self, v: Mapping[str, Any], _info: Any) -> dict[str, Any]:
         return _unfreeze_for_serialization(v)
 
+    @property
+    def canonical_text(self) -> str:
+        return self.text
+
+    @property
+    def document_id(self) -> str:
+        return str(self.case_id)
+
 
 def construct_canonical_case_text(case: HistoricalCase) -> str:
     """
