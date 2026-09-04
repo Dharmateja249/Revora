@@ -7,6 +7,7 @@ retrieval exceptions.
 """
 
 from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -90,6 +91,10 @@ class CustomerContext(BaseModel):
     successful_payments: int = Field(default=0, ge=0)
     failed_payments: int = Field(default=0, ge=0)
     historical_success_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    total_transaction_amount: float = Field(default=0.0, ge=0.0)
+    successful_transaction_amount: float = Field(default=0.0, ge=0.0)
+    average_transaction_amount: float = Field(default=0.0, ge=0.0)
+    recent_payment_behavior: list[dict[str, Any]] = Field(default_factory=list)
     created_at: datetime | None = None
 
 
@@ -177,6 +182,9 @@ class CustomerRecoveryStatsContext(BaseModel):
     previously_successful_actions: list[str] = Field(default_factory=list)
     previously_failed_actions: list[str] = Field(default_factory=list)
     total_amount_recovered: float = Field(default=0.0, ge=0.0)
+    total_transaction_amount: float = Field(default=0.0, ge=0.0)
+    successful_transaction_amount: float = Field(default=0.0, ge=0.0)
+    average_transaction_amount: float = Field(default=0.0, ge=0.0)
 
 
 class CustomerRecoveryContext(BaseModel):

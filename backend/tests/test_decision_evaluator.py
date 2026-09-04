@@ -10,8 +10,6 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from pydantic import ValidationError
-
 from app.agent.orchestrator import AgentOrchestrator
 from app.agent.schemas import (
     AgentDecisionResult,
@@ -37,6 +35,8 @@ from app.evaluation.schemas import (
     DecisionGroundTruth,
     EvaluationCase,
 )
+from pydantic import ValidationError
+
 from tests.fixtures.retrieval_golden_dataset import (
     get_golden_evaluation_cases,
 )

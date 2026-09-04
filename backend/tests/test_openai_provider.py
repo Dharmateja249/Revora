@@ -18,8 +18,6 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import openai
 import pytest
-from pydantic import ValidationError
-
 from app.agent.openai_provider import (
     OpenAILLMProvider,
     RealLLMProvider,
@@ -37,6 +35,7 @@ from app.agent.provider import (
 from app.agent.schemas import LLMRecoveryRecommendation
 from app.config import Settings
 from app.decision_engine import RecoveryAction
+from pydantic import ValidationError
 
 # ============================================================================
 # Test Fixtures & Mocks

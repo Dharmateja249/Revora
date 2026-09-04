@@ -143,6 +143,10 @@ class AgentDecisionPromptContext(BaseModel):
         default_factory=tuple,
         description="Top-K retrieved similar historical recovery cases without PII.",
     )
+    recent_payment_behavior: tuple[Mapping[str, Any], ...] = Field(
+        default_factory=tuple,
+        description="Bounded sequence of customer's recent historical payments without PII.",
+    )
     allowed_actions: tuple[str, ...] = Field(
         default_factory=tuple,
         description="List of action names permitted under active policy rules.",
@@ -178,7 +182,12 @@ class AgentDecisionPromptContext(BaseModel):
     def _freeze_dict_fields(cls, v: Any) -> Mapping[str, Any]:
         return _freeze_nested(v) if v is not None else types.MappingProxyType({})
 
-    @field_validator("recovery_attempt_history", "historical_cases", mode="before")
+    @field_validator(
+        "recovery_attempt_history",
+        "historical_cases",
+        "recent_payment_behavior",
+        mode="before",
+    )
     @classmethod
     def _normalize_list_of_mappings(cls, v: Any) -> Any:
         if v is None:
@@ -187,7 +196,12 @@ class AgentDecisionPromptContext(BaseModel):
             raise TypeError(f"Expected sequence of mappings, got {type(v).__name__}")
         return v
 
-    @field_validator("recovery_attempt_history", "historical_cases", mode="after")
+    @field_validator(
+        "recovery_attempt_history",
+        "historical_cases",
+        "recent_payment_behavior",
+        mode="after",
+    )
     @classmethod
     def _freeze_list_of_mappings(cls, v: Any) -> tuple[Mapping[str, Any], ...]:
         return _freeze_nested(v) if v is not None else ()
@@ -215,7 +229,11 @@ class AgentDecisionPromptContext(BaseModel):
     def _serialize_mappings(self, v: Mapping[str, Any], _info: Any) -> dict[str, Any]:
         return _unfreeze_for_serialization(v)
 
-    @field_serializer("recovery_attempt_history", "historical_cases")
+    @field_serializer(
+        "recovery_attempt_history",
+        "historical_cases",
+        "recent_payment_behavior",
+    )
     def _serialize_mapping_tuples(
         self, v: tuple[Mapping[str, Any], ...], _info: Any
     ) -> list[dict[str, Any]]:

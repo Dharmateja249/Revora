@@ -81,6 +81,15 @@ class RecoveryDecision(BaseModel):
 
 
 # Failure Reason Classification Sets (Normalized lowercase)
+FRAUD_SECURITY_DECLINE_REASONS: set[str] = {
+    "fraud_hard_decline",
+    "fraud_suspected",
+    "fraudulent",
+    "fraud",
+    "risk_threshold_exceeded",
+    "security_violation",
+}
+
 PERMANENT_FAILURE_REASONS: set[str] = {
     "card_expired",
     "expired_card",
@@ -343,9 +352,15 @@ class DecisionEngine:
         elif failure_reason in TRANSIENT_TECHNICAL_REASONS:
             exact_category = "transient"
 
-        is_permanent = (exact_category == "permanent") or (
-            exact_category is None
-            and any(term in failure_reason for term in PERMANENT_FAILURE_REASONS)
+        is_fraud = (failure_reason in FRAUD_SECURITY_DECLINE_REASONS) or any(
+            term in failure_reason for term in FRAUD_SECURITY_DECLINE_REASONS
+        )
+        is_permanent = not is_fraud and (
+            (exact_category == "permanent")
+            or (
+                exact_category is None
+                and any(term in failure_reason for term in PERMANENT_FAILURE_REASONS)
+            )
         )
         is_transient = (exact_category == "transient") or (
             exact_category is None
@@ -399,6 +414,18 @@ class DecisionEngine:
                 decision_basis={
                     **base_basis,
                     "rule_matched": "MaxAttemptsExceededRule",
+                },
+            )
+
+        # Rule 2.5: Fraud / Hard Security Decline (Must stop, no recovery action)
+        if is_fraud:
+            return RecoveryDecision(
+                recommended_action=RecoveryAction.NO_ACTION,
+                reason=f"Fraud or hard security decline detected ({failure_reason_raw}); all recovery actions prohibited.",
+                confidence=0.95,
+                decision_basis={
+                    **base_basis,
+                    "rule_matched": "FraudSecurityDeclineRule",
                 },
             )
 

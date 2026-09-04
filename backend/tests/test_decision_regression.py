@@ -8,7 +8,6 @@ comparative run regression detection, and CLI quality gate integration.
 from uuid import uuid4
 
 import pytest
-
 from app.decision_engine import RecoveryAction
 from app.evaluation.decision_benchmark import run_decision_cli
 from app.evaluation.decision_regression import (
@@ -24,6 +23,7 @@ from app.evaluation.schemas import (
     DecisionEvalResult,
     EvaluationRegressionError,
 )
+
 from tests.fixtures.retrieval_golden_dataset import get_golden_evaluation_cases
 
 

@@ -137,14 +137,16 @@ class RazorpayAdapter:
             simulated_id = f"plink_sim_{uuid4().hex[:14]}"
             simulated_url = f"https://rzp.io/i/sim_{uuid4().hex[:8]}"
             logger.info(
-                "Simulated Razorpay Payment Link creation: id=%s amount=%s %s",
+                "Simulated Razorpay Payment Link creation: id=%s amount=%s %s reference_id=%s",
                 simulated_id,
                 amount,
                 currency,
+                reference_id,
             )
             return {
                 "id": simulated_id,
                 "short_url": simulated_url,
+                "reference_id": reference_id,
                 "status": "created",
                 "amount": amount_in_subunits,
                 "currency": currency.upper(),

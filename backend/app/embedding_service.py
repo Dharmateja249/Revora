@@ -10,6 +10,7 @@ import math
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from typing import Any
 
 
 class EmbeddingProvider(ABC):
@@ -165,6 +166,11 @@ class EmbeddingService:
                 f"Provider returned vector of dimension {len(vector)}, expected {self.dimension}"
             )
         return vector
+
+    def embed_document(self, doc: Any) -> list[float]:
+        """Embed a document object with a canonical_text attribute or string conversion."""
+        text = getattr(doc, "canonical_text", str(doc))
+        return self.embed(text)
 
     def embed_batch(self, texts: Sequence[str]) -> list[list[float]]:
         """

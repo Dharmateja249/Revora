@@ -140,6 +140,11 @@ class RecoveryDecisionRequest(BaseModel):
         default=False,
         description="Whether to execute the policy-approved recovery action via gateway adapter. Defaults to False (opt-in).",
     )
+    idempotency_key: str | None = Field(
+        default=None,
+        max_length=255,
+        description="Optional client-provided idempotency key for deduplication across retries.",
+    )
 
 
 class ActionExecutionResultDTO(BaseModel):
@@ -184,6 +189,14 @@ class ActionExecutionResultDTO(BaseModel):
     error: str | None = Field(
         default=None,
         description="Safe diagnostic error if execution failed.",
+    )
+    persisted: bool = Field(
+        default=True,
+        description="Whether the recovery execution outcome was successfully persisted in the database.",
+    )
+    persistence_error: str | None = Field(
+        default=None,
+        description="Safe public description if database persistence failed.",
     )
 
 
@@ -239,4 +252,33 @@ class RecoveryDecisionResponse(BaseModel):
     execution: ActionExecutionResultDTO | None = Field(
         default=None,
         description="Structured outcome of recovery action execution, if attempted.",
+    )
+    request_id: str | None = Field(
+        default=None,
+        description="Correlation identifier for tracing the recovery request across lifecycle stages.",
+    )
+    payment_id: UUID | None = Field(
+        default=None,
+        description="Authoritative payment identifier bound to this recovery case.",
+    )
+    opportunity_id: UUID | None = Field(
+        default=None,
+        description="Authoritative recovery opportunity identifier.",
+    )
+    opportunity_status: str | None = Field(
+        default=None,
+        description="Authoritative lifecycle status of the recovery opportunity ('open', 'recovered', 'failed', 'in_progress').",
+    )
+    attempt_count: int = Field(
+        default=0,
+        ge=0,
+        description="Authoritative count of recovery attempts executed on this payment opportunity.",
+    )
+    previous_attempts: list[RecoveryAttemptDTO] = Field(
+        default_factory=list,
+        description="Authoritative history of prior recovery attempts recorded for this payment.",
+    )
+    customer: CustomerProfileDTO | None = Field(
+        default=None,
+        description="Authoritative customer profile and transaction statistics derived from database.",
     )

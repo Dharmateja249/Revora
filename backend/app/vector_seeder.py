@@ -6,12 +6,10 @@ of historical recovery precedents for the demo customer tenant, enabling
 genuine semantic RAG retrieval during interactive recovery evaluation.
 """
 
-from collections.abc import Sequence
-from datetime import datetime, timezone
 import logging
+from datetime import datetime, timezone
 from uuid import UUID
 
-from app.config import get_settings
 from app.embedding_service import EmbeddingService, get_embedding_service
 from app.historical_retrieval import HistoricalCase
 from app.retrieval_document import historical_case_to_document
@@ -317,9 +315,7 @@ def seed_runtime_vector_index(
         UUID(str(customer_id)) if customer_id is not None else DEMO_CUSTOMER_UUID
     )
     resolved_embedding = (
-        embedding_service
-        if embedding_service is not None
-        else get_embedding_service()
+        embedding_service if embedding_service is not None else get_embedding_service()
     )
 
     precedents = get_curated_historical_precedents(customer_id=resolved_cust_id)

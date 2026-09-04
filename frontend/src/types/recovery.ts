@@ -40,6 +40,7 @@ export interface RecoveryDecisionRequest {
   revenue_at_risk?: number | null;
   max_attempts?: number;
   execute_action?: boolean;
+  idempotency_key?: string | null;
 }
 
 export interface ActionExecutionResultDTO {
@@ -51,6 +52,8 @@ export interface ActionExecutionResultDTO {
   resource_url?: string | null;
   message: string;
   error?: string | null;
+  persisted?: boolean;
+  persistence_error?: string | null;
 }
 
 export interface RecoveryDecisionResponse {
@@ -64,12 +67,38 @@ export interface RecoveryDecisionResponse {
   is_fallback: boolean;
   fallback_reason?: string | null;
   execution?: ActionExecutionResultDTO | null;
+  request_id?: string | null;
+  payment_id?: string | null;
+  opportunity_id?: string | null;
+  opportunity_status?: string | null;
+  attempt_count?: number;
+  previous_attempts?: RecoveryAttemptDTO[];
+  customer?: CustomerProfileDTO | null;
 }
 
 export interface HealthCheckResponse {
   status: string;
   app: string;
   version: string;
+}
+
+export interface DashboardMetrics {
+  recovery_rate: number;
+  amount_recovered: number;
+  total_cases: number;
+  recovered_cases: number;
+  failed_cases: number;
+  pending_cases: number;
+  revenue_at_risk: number;
+  execution_success_rate: number;
+  total_executions: number;
+  successful_executions: number;
+  failed_executions: number;
+  pending_executions: number;
+  policy_overrides: number;
+  rag_precedents: number;
+  average_confidence: number;
+  fallback_decisions: number;
 }
 
 export interface AuthTokenResponse {
@@ -92,4 +121,5 @@ export interface DemoPaymentCase {
   displayStatus: "Failed" | "Recovered" | "In Recovery";
   description: string;
   badgeColor?: string;
+  attempt_count?: number;
 }

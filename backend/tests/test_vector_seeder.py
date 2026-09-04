@@ -13,8 +13,6 @@ Verifies:
 
 from uuid import UUID, uuid4
 
-import pytest
-
 from app.agent.context_builder import AgentContextBuilder
 from app.context import (
     CustomerContext,
@@ -27,7 +25,6 @@ from app.semantic_historical_retriever import SemanticHistoricalRetriever
 from app.vector_index import VectorIndex
 from app.vector_seeder import (
     DEMO_CUSTOMER_UUID,
-    get_curated_historical_precedents,
     seed_runtime_vector_index,
 )
 
@@ -194,7 +191,9 @@ def test_documents_belonging_to_another_customer_not_returned():
     )
 
     results = retriever.retrieve(ctx, top_k=5)
-    assert len(results) == 0, "Foreign customer must not receive another tenant's precedents"
+    assert len(results) == 0, (
+        "Foreign customer must not receive another tenant's precedents"
+    )
 
 
 def test_citation_tokens_remain_deterministic_and_safe():
@@ -258,9 +257,9 @@ def test_citation_tokens_remain_deterministic_and_safe():
 
 def test_fastapi_lifespan_seeds_shared_vector_index():
     """Verify that starting FastAPI application via lifespan seeds the shared vector index."""
-    from fastapi.testclient import TestClient
     from app.main import app
     from app.vector_index import get_vector_index
+    from fastapi.testclient import TestClient
 
     with TestClient(app) as client:
         resp = client.get("/health")

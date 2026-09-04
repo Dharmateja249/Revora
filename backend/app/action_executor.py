@@ -84,6 +84,7 @@ class ActionExecutor:
         approved_action: RecoveryAction,
         policy_context: RecoveryPolicyContext,
         context: CustomerRecoveryContext,
+        reference_id: str | None = None,
     ) -> ActionResult:
         """
         Execute an approved recovery action through the appropriate provider adapter.
@@ -92,6 +93,7 @@ class ActionExecutor:
             approved_action: RecoveryAction selected by orchestrator/validator.
             policy_context: Policy context defining allowed/prohibited constraints.
             context: Customer and payment recovery context.
+            reference_id: Deterministic idempotency reference key for gateway deduplication.
 
         Returns:
             ActionResult indicating execution success, failure, or safe skip.
@@ -156,6 +158,7 @@ class ActionExecutor:
                     customer_name=customer_name,
                     customer_email=customer_email,
                     description=f"Payment recovery for failed {payment_method.upper()} payment",
+                    reference_id=reference_id,
                 )
 
             return await self._execute_payment_link(
@@ -165,6 +168,7 @@ class ActionExecutor:
                 customer_email=customer_email,
                 description="Complete payment by selecting a different payment method",
                 is_method_change=True,
+                reference_id=reference_id,
             )
 
         if approved_action == RecoveryAction.RETRY_PAYMENT:
@@ -210,6 +214,7 @@ class ActionExecutor:
         customer_email: str | None,
         description: str,
         is_method_change: bool = False,
+        reference_id: str | None = None,
     ) -> ActionResult:
         """Create an interactive Razorpay Payment Link."""
         target_action = (
@@ -224,6 +229,7 @@ class ActionExecutor:
                 description=description,
                 customer_name=customer_name,
                 customer_email=customer_email,
+                reference_id=reference_id,
             )
             is_sim = res.get("simulated", False)
             status_str = "simulated" if is_sim else "success"
@@ -248,6 +254,16 @@ class ActionExecutor:
                 success=False,
                 error=str(exc),
                 message="Razorpay payment link creation failed.",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Unexpected error during payment link creation: %s", exc)
+            return ActionResult(
+                action=target_action,
+                attempted=True,
+                status="failed",
+                success=False,
+                error=str(exc),
+                message="Unexpected error during payment link creation.",
             )
 
     def _execute_retry_payment(

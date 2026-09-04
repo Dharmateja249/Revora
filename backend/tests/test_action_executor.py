@@ -18,7 +18,6 @@ from uuid import uuid4
 
 import httpx
 import pytest
-
 from app.action_executor import ActionExecutor, ActionResult
 from app.context import (
     CustomerContext,

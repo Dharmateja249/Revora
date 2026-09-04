@@ -18,7 +18,6 @@ Comprehensive testing of mathematical decision metrics:
 from uuid import uuid4
 
 import pytest
-
 from app.decision_engine import RecoveryAction
 from app.evaluation.decision_metrics import (
     acceptable_match_rate,

@@ -14,7 +14,6 @@ Verifies that create_llm_provider:
 from unittest.mock import MagicMock
 
 import pytest
-
 from app.agent.factory import create_llm_provider
 from app.agent.gemini_provider import GeminiLLMProvider
 from app.agent.huggingface_provider import HuggingFaceLLMProvider

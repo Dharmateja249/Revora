@@ -5,7 +5,6 @@ Unit tests for Revora Agent Prompt Generation.
 import json
 
 import pytest
-
 from app.agent.prompts import (
     REVORA_AGENT_SYSTEM_PROMPT,
     build_agent_messages,

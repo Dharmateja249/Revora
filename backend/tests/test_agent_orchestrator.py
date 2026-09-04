@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from app.agent.orchestrator import AgentOrchestrator
 from app.agent.provider import (
     LLMProviderError,
@@ -841,7 +840,6 @@ async def test_orchestrator_openai_provider_failure_fails_closed(
     """Verify OpenAI provider error causes AgentOrchestrator to fail closed to deterministic fallback."""
     import httpx
     import openai
-
     from app.agent.openai_provider import OpenAILLMProvider
 
     req = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")

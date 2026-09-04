@@ -6,11 +6,6 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-from fastapi import status
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
 from app.database import Base, get_db
 from app.decision_engine import RecoveryAction
 from app.historical_retrieval import HistoricalCase
@@ -25,6 +20,10 @@ from app.models import (
 from app.policies.registry import DEFAULT_POLICY_VERSION
 from app.recovery_service import RecoveryService
 from app.schemas.recovery import RecoveryEvaluationRequest
+from fastapi import status
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture

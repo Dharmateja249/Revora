@@ -24,8 +24,6 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from pydantic import ValidationError
-
 from app.context import (
     CustomerContext,
     CustomerRecoveryContext,
@@ -78,6 +76,7 @@ from app.evaluation.schemas import (
     DecisionGroundTruth,
     EvaluationCase,
 )
+from pydantic import ValidationError
 
 
 def _dummy_context(

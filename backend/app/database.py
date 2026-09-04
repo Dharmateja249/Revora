@@ -1,6 +1,6 @@
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.config import get_settings
@@ -33,7 +33,24 @@ def get_db() -> Generator:
 
 
 def init_db() -> None:
-    """Create all database tables defined in the application models."""
+    """Create all database tables defined in the application models and ensure schema consistency."""
     import app.models  # noqa: F401 (Ensure models are imported and registered with Base)
 
     Base.metadata.create_all(bind=engine)
+
+    inspector = inspect(engine)
+    if "recovery_attempts" in inspector.get_table_names():
+        columns = {col["name"] for col in inspector.get_columns("recovery_attempts")}
+        if "idempotency_key" not in columns:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "ALTER TABLE recovery_attempts ADD COLUMN idempotency_key VARCHAR(255)"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS ix_recovery_attempts_idempotency_key "
+                        "ON recovery_attempts (idempotency_key)"
+                    )
+                )

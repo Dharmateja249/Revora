@@ -10,7 +10,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-
 from app.agent.orchestrator import AgentOrchestrator
 from app.agent.schemas import AgentDecisionResult, LLMRecoveryRecommendation
 from app.decision_engine import RecoveryAction
@@ -26,6 +25,7 @@ from app.evaluation.decision_evaluator import (
     DeterministicRAGPipeline,
 )
 from app.evaluation.schemas import DecisionBenchmarkReport
+
 from tests.fixtures.retrieval_golden_dataset import get_golden_evaluation_cases
 
 
@@ -332,7 +332,9 @@ def test_resolve_decision_pipeline_huggingface_provider_with_token(monkeypatch):
     assert isinstance(pipe._orchestrator.provider, HuggingFaceLLMProvider)
 
 
-def test_resolve_decision_pipeline_huggingface_provider_missing_token_fails(monkeypatch):
+def test_resolve_decision_pipeline_huggingface_provider_missing_token_fails(
+    monkeypatch,
+):
     """Verify resolve_decision_pipeline raises ValueError if HF_TOKEN is missing."""
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("LLM_API_KEY", raising=False)

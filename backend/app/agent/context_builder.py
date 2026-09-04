@@ -97,6 +97,10 @@ class AgentContextBuilder:
         attempt_history_payload = self._build_attempt_history(
             context.current_payment_attempts
         )
+        recent_payment_behavior_payload = self._build_recent_payment_behavior(
+            context.customer,
+            context.historical_payments,
+        )
         historical_cases_payload = self._build_historical_cases(historical_cases)
         allowed_actions, prohibited_actions, mandatory_fallback, policy_constraints = (
             self._build_policy_boundary(policy_context)
@@ -107,6 +111,7 @@ class AgentContextBuilder:
             customer_profile=customer_profile_payload,
             attempt_budget=attempt_budget_payload,
             recovery_attempt_history=attempt_history_payload,
+            recent_payment_behavior=recent_payment_behavior_payload,
             historical_cases=historical_cases_payload,
             allowed_actions=allowed_actions,
             prohibited_actions=prohibited_actions,
@@ -199,12 +204,30 @@ class AgentContextBuilder:
         lifetime_amount_recovered = (
             float(stats.total_amount_recovered) if stats else 0.0
         )
+        total_transaction_amount = (
+            float(customer.total_transaction_amount)
+            if customer and hasattr(customer, "total_transaction_amount")
+            else 0.0
+        )
+        successful_transaction_amount = (
+            float(customer.successful_transaction_amount)
+            if customer and hasattr(customer, "successful_transaction_amount")
+            else 0.0
+        )
+        average_transaction_amount = (
+            float(customer.average_transaction_amount)
+            if customer and hasattr(customer, "average_transaction_amount")
+            else 0.0
+        )
 
         return {
             "total_payments": total_payments,
             "successful_payments": successful_payments,
             "failed_payments": failed_payments,
             "historical_success_rate": historical_success_rate,
+            "total_transaction_amount": total_transaction_amount,
+            "successful_transaction_amount": successful_transaction_amount,
+            "average_transaction_amount": average_transaction_amount,
             "total_recovery_opportunities": total_recovery_opportunities,
             "recovered_opportunities": recovered_opportunities,
             "failed_opportunities": failed_opportunities,
@@ -213,6 +236,49 @@ class AgentContextBuilder:
             "previously_failed_actions": previously_failed_actions,
             "lifetime_amount_recovered": lifetime_amount_recovered,
         }
+
+    def _build_recent_payment_behavior(
+        self,
+        customer: CustomerContext | None,
+        historical_payments: Any | None,
+    ) -> list[dict[str, Any]]:
+        """
+        Extract bounded recent payment behavior without internal UUIDs or PII.
+        """
+        if (
+            customer
+            and hasattr(customer, "recent_payment_behavior")
+            and customer.recent_payment_behavior
+        ):
+            raw_behavior = customer.recent_payment_behavior[:5]
+            return [
+                {
+                    "amount": float(b.get("amount", 0.0)),
+                    "currency": str(b.get("currency", "INR")),
+                    "payment_method": str(b.get("payment_method", "unspecified")),
+                    "status": str(b.get("status", "unknown")),
+                    "failure_reason": str(b["failure_reason"])
+                    if b.get("failure_reason")
+                    else None,
+                    "was_recovered": bool(b.get("was_recovered", False)),
+                }
+                for b in raw_behavior
+            ]
+        if historical_payments:
+            return [
+                {
+                    "amount": float(p.amount),
+                    "currency": str(p.currency),
+                    "payment_method": str(p.payment_method),
+                    "status": str(p.status),
+                    "failure_reason": str(p.failure_reason)
+                    if p.failure_reason
+                    else None,
+                    "was_recovered": bool(p.was_recovered),
+                }
+                for p in list(historical_payments)[:5]
+            ]
+        return []
 
     def _build_attempt_history(
         self,
